@@ -1,0 +1,23 @@
+# Ignore these files when building Docker image
+data/
+*.out
+.git/
+.gitignore
+*.md
+LICENSE
+
+# Python cache
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# C++ compiled
+*.o
+*.exe
+state_generation
+Dataset/state_generation
+
+# IDE
+.vscode/
+.idea/
+
