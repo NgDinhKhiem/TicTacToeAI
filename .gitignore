@@ -4,6 +4,7 @@
 *.exe
 *.out
 *.app
+*.bin
 state_generation
 state_generation_win
 verifier
@@ -61,3 +62,4 @@ desktop.ini
 
 # Logs
 *.log
+Dataset/config.json
