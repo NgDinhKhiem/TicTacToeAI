@@ -263,6 +263,7 @@ std::pair<int,int> count_tokens(const CompactBoard& board) {
     return {x, o};
 }
 
+// Batch result: lightweight
 struct BatchResult {
     size_t wins = 0;
     size_t draws = 0;
@@ -311,6 +312,7 @@ BatchResult process_batch(const std::vector<CompactBoard>& boards, int bytes_per
     return res;
 }
 
+// BoardStateMap: writes binary boards in buffered manner (single large byte buffer)
 class BoardStateMap {
     std::ofstream file;
     int board_size;
