@@ -32,9 +32,9 @@ enum CellState : uint8_t {
 };
 
 struct CompactBoard {
-    static constexpr size_t INLINE_CAPACITY = 16; // Inline storage for boards up to 8x8
+    static constexpr size_t INLINE_CAPACITY = 24; // Inline storage for boards up to 9x9 (cache-line friendly)
     
-    union {
+    union alignas(8) {
         uint8_t inline_data[INLINE_CAPACITY];
         uint8_t* heap_data;
     };
@@ -45,7 +45,17 @@ struct CompactBoard {
     
     CompactBoard(int board_size, int bytes_per_board) : size((uint16_t)board_size), capacity((uint16_t)bytes_per_board) {
         if (bytes_per_board <= INLINE_CAPACITY) {
-            std::memset(inline_data, 0, bytes_per_board);
+            // Fast path: inline storage (zero-initialize)
+            if (bytes_per_board <= 8) {
+                *reinterpret_cast<uint64_t*>(inline_data) = 0;
+            } else if (bytes_per_board <= 16) {
+                *reinterpret_cast<uint64_t*>(inline_data) = 0;
+                *reinterpret_cast<uint64_t*>(inline_data + 8) = 0;
+            } else {
+                *reinterpret_cast<uint64_t*>(inline_data) = 0;
+                *reinterpret_cast<uint64_t*>(inline_data + 8) = 0;
+                *reinterpret_cast<uint64_t*>(inline_data + 16) = 0;
+            }
         } else {
             heap_data = new uint8_t[bytes_per_board]();
         }
@@ -53,7 +63,17 @@ struct CompactBoard {
     
     CompactBoard(const CompactBoard& other) : size(other.size), capacity(other.capacity) {
         if (capacity <= INLINE_CAPACITY) {
-            std::memcpy(inline_data, other.inline_data, capacity);
+            // Fast path: copy inline data using uint64_t for speed
+            if (capacity <= 8) {
+                *reinterpret_cast<uint64_t*>(inline_data) = *reinterpret_cast<const uint64_t*>(other.inline_data);
+            } else if (capacity <= 16) {
+                *reinterpret_cast<uint64_t*>(inline_data) = *reinterpret_cast<const uint64_t*>(other.inline_data);
+                *reinterpret_cast<uint64_t*>(inline_data + 8) = *reinterpret_cast<const uint64_t*>(other.inline_data + 8);
+            } else {
+                *reinterpret_cast<uint64_t*>(inline_data) = *reinterpret_cast<const uint64_t*>(other.inline_data);
+                *reinterpret_cast<uint64_t*>(inline_data + 8) = *reinterpret_cast<const uint64_t*>(other.inline_data + 8);
+                *reinterpret_cast<uint64_t*>(inline_data + 16) = *reinterpret_cast<const uint64_t*>(other.inline_data + 16);
+            }
         } else {
             heap_data = new uint8_t[capacity];
             std::memcpy(heap_data, other.heap_data, capacity);
@@ -62,7 +82,17 @@ struct CompactBoard {
     
     CompactBoard(CompactBoard&& other) noexcept : size(other.size), capacity(other.capacity) {
         if (capacity <= INLINE_CAPACITY) {
-            std::memcpy(inline_data, other.inline_data, capacity);
+            // Fast inline copy for move (same as copy for inline)
+            if (capacity <= 8) {
+                *reinterpret_cast<uint64_t*>(inline_data) = *reinterpret_cast<const uint64_t*>(other.inline_data);
+            } else if (capacity <= 16) {
+                *reinterpret_cast<uint64_t*>(inline_data) = *reinterpret_cast<const uint64_t*>(other.inline_data);
+                *reinterpret_cast<uint64_t*>(inline_data + 8) = *reinterpret_cast<const uint64_t*>(other.inline_data + 8);
+            } else {
+                *reinterpret_cast<uint64_t*>(inline_data) = *reinterpret_cast<const uint64_t*>(other.inline_data);
+                *reinterpret_cast<uint64_t*>(inline_data + 8) = *reinterpret_cast<const uint64_t*>(other.inline_data + 8);
+                *reinterpret_cast<uint64_t*>(inline_data + 16) = *reinterpret_cast<const uint64_t*>(other.inline_data + 16);
+            }
         } else {
             heap_data = other.heap_data;
             other.heap_data = nullptr;
@@ -79,7 +109,16 @@ struct CompactBoard {
             size = other.size;
             capacity = other.capacity;
             if (capacity <= INLINE_CAPACITY) {
-                std::memcpy(inline_data, other.inline_data, capacity);
+                if (capacity <= 8) {
+                    *reinterpret_cast<uint64_t*>(inline_data) = *reinterpret_cast<const uint64_t*>(other.inline_data);
+                } else if (capacity <= 16) {
+                    *reinterpret_cast<uint64_t*>(inline_data) = *reinterpret_cast<const uint64_t*>(other.inline_data);
+                    *reinterpret_cast<uint64_t*>(inline_data + 8) = *reinterpret_cast<const uint64_t*>(other.inline_data + 8);
+                } else {
+                    *reinterpret_cast<uint64_t*>(inline_data) = *reinterpret_cast<const uint64_t*>(other.inline_data);
+                    *reinterpret_cast<uint64_t*>(inline_data + 8) = *reinterpret_cast<const uint64_t*>(other.inline_data + 8);
+                    *reinterpret_cast<uint64_t*>(inline_data + 16) = *reinterpret_cast<const uint64_t*>(other.inline_data + 16);
+                }
             } else {
                 heap_data = new uint8_t[capacity];
                 std::memcpy(heap_data, other.heap_data, capacity);
@@ -96,7 +135,16 @@ struct CompactBoard {
             size = other.size;
             capacity = other.capacity;
             if (capacity <= INLINE_CAPACITY) {
-                std::memcpy(inline_data, other.inline_data, capacity);
+                if (capacity <= 8) {
+                    *reinterpret_cast<uint64_t*>(inline_data) = *reinterpret_cast<const uint64_t*>(other.inline_data);
+                } else if (capacity <= 16) {
+                    *reinterpret_cast<uint64_t*>(inline_data) = *reinterpret_cast<const uint64_t*>(other.inline_data);
+                    *reinterpret_cast<uint64_t*>(inline_data + 8) = *reinterpret_cast<const uint64_t*>(other.inline_data + 8);
+                } else {
+                    *reinterpret_cast<uint64_t*>(inline_data) = *reinterpret_cast<const uint64_t*>(other.inline_data);
+                    *reinterpret_cast<uint64_t*>(inline_data + 8) = *reinterpret_cast<const uint64_t*>(other.inline_data + 8);
+                    *reinterpret_cast<uint64_t*>(inline_data + 16) = *reinterpret_cast<const uint64_t*>(other.inline_data + 16);
+                }
             } else {
                 heap_data = other.heap_data;
                 other.heap_data = nullptr;
@@ -158,29 +206,130 @@ struct CompactBoard {
 
     bool operator==(const CompactBoard& other) const noexcept {
         if (size != other.size || capacity != other.capacity) return false;
-        return std::memcmp(data_ptr(), other.data_ptr(), capacity) == 0;
+        
+        // Fast path for inline storage using uint64_t comparisons
+        if (capacity <= INLINE_CAPACITY) {
+            if (capacity <= 8) {
+                return *reinterpret_cast<const uint64_t*>(inline_data) == 
+                       *reinterpret_cast<const uint64_t*>(other.inline_data);
+            } else if (capacity <= 16) {
+                return *reinterpret_cast<const uint64_t*>(inline_data) == 
+                       *reinterpret_cast<const uint64_t*>(other.inline_data) &&
+                       *reinterpret_cast<const uint64_t*>(inline_data + 8) == 
+                       *reinterpret_cast<const uint64_t*>(other.inline_data + 8);
+            } else {
+                return *reinterpret_cast<const uint64_t*>(inline_data) == 
+                       *reinterpret_cast<const uint64_t*>(other.inline_data) &&
+                       *reinterpret_cast<const uint64_t*>(inline_data + 8) == 
+                       *reinterpret_cast<const uint64_t*>(other.inline_data + 8) &&
+                       *reinterpret_cast<const uint64_t*>(inline_data + 16) == 
+                       *reinterpret_cast<const uint64_t*>(other.inline_data + 16);
+            }
+        }
+        return std::memcmp(heap_data, other.heap_data, capacity) == 0;
     }
 
     bool operator<(const CompactBoard& other) const noexcept {
         if (size != other.size) return size < other.size;
         if (capacity != other.capacity) return capacity < other.capacity;
-        return std::memcmp(data_ptr(), other.data_ptr(), capacity) < 0;
+        
+        // Fast path for inline storage using uint64_t comparisons
+        if (capacity <= INLINE_CAPACITY) {
+            if (capacity <= 8) {
+                return *reinterpret_cast<const uint64_t*>(inline_data) < 
+                       *reinterpret_cast<const uint64_t*>(other.inline_data);
+            } else if (capacity <= 16) {
+                uint64_t a0 = *reinterpret_cast<const uint64_t*>(inline_data);
+                uint64_t b0 = *reinterpret_cast<const uint64_t*>(other.inline_data);
+                if (a0 != b0) return a0 < b0;
+                return *reinterpret_cast<const uint64_t*>(inline_data + 8) < 
+                       *reinterpret_cast<const uint64_t*>(other.inline_data + 8);
+            } else {
+                uint64_t a0 = *reinterpret_cast<const uint64_t*>(inline_data);
+                uint64_t b0 = *reinterpret_cast<const uint64_t*>(other.inline_data);
+                if (a0 != b0) return a0 < b0;
+                uint64_t a1 = *reinterpret_cast<const uint64_t*>(inline_data + 8);
+                uint64_t b1 = *reinterpret_cast<const uint64_t*>(other.inline_data + 8);
+                if (a1 != b1) return a1 < b1;
+                return *reinterpret_cast<const uint64_t*>(inline_data + 16) < 
+                       *reinterpret_cast<const uint64_t*>(other.inline_data + 16);
+            }
+        }
+        return std::memcmp(heap_data, other.heap_data, capacity) < 0;
     }
 };
 
 struct CompactBoardHash {
     size_t operator()(const CompactBoard& b) const noexcept {
-        // 64-bit FNV-1a
-        const uint64_t fnv_offset = 14695981039346656037ull;
-        const uint64_t fnv_prime  = 1099511628211ull;
-        uint64_t h = fnv_offset;
-        const uint8_t* data = b.data_ptr();
-        for (size_t i = 0; i < b.capacity; ++i) {
-            h ^= (uint64_t)data[i];
-            h *= fnv_prime;
+        // Fast hash using xxHash-inspired approach with uint64_t operations
+        const uint64_t PRIME1 = 11400714785074694791ULL;
+        const uint64_t PRIME2 = 14029467366897019727ULL;
+        const uint64_t PRIME3 = 1609587929392839161ULL;
+        const uint64_t PRIME4 = 9650029242287828579ULL;
+        const uint64_t PRIME5 = 2870177450012600261ULL;
+        
+        uint64_t h = PRIME5 + (uint64_t)b.size;
+        
+        // Fast path for inline storage using uint64_t operations
+        if (b.capacity <= CompactBoard::INLINE_CAPACITY) {
+            if (b.capacity <= 8) {
+                uint64_t k1 = *reinterpret_cast<const uint64_t*>(b.inline_data);
+                k1 *= PRIME2;
+                k1 = (k1 << 31) | (k1 >> 33);
+                k1 *= PRIME1;
+                h ^= k1;
+                h = (h << 27) | (h >> 37);
+                h = h * PRIME1 + PRIME4;
+            } else if (b.capacity <= 16) {
+                uint64_t k1 = *reinterpret_cast<const uint64_t*>(b.inline_data);
+                k1 *= PRIME2; k1 = (k1 << 31) | (k1 >> 33); k1 *= PRIME1;
+                h ^= k1; h = (h << 27) | (h >> 37); h = h * PRIME1 + PRIME4;
+                
+                uint64_t k2 = *reinterpret_cast<const uint64_t*>(b.inline_data + 8);
+                k2 *= PRIME2; k2 = (k2 << 31) | (k2 >> 33); k2 *= PRIME1;
+                h ^= k2; h = (h << 27) | (h >> 37); h = h * PRIME1 + PRIME4;
+            } else {
+                uint64_t k1 = *reinterpret_cast<const uint64_t*>(b.inline_data);
+                k1 *= PRIME2; k1 = (k1 << 31) | (k1 >> 33); k1 *= PRIME1;
+                h ^= k1; h = (h << 27) | (h >> 37); h = h * PRIME1 + PRIME4;
+                
+                uint64_t k2 = *reinterpret_cast<const uint64_t*>(b.inline_data + 8);
+                k2 *= PRIME2; k2 = (k2 << 31) | (k2 >> 33); k2 *= PRIME1;
+                h ^= k2; h = (h << 27) | (h >> 37); h = h * PRIME1 + PRIME4;
+                
+                uint64_t k3 = *reinterpret_cast<const uint64_t*>(b.inline_data + 16);
+                k3 *= PRIME2; k3 = (k3 << 31) | (k3 >> 33); k3 *= PRIME1;
+                h ^= k3; h = (h << 27) | (h >> 37); h = h * PRIME1 + PRIME4;
+            }
+        } else {
+            // Heap storage: process 8 bytes at a time
+            const uint8_t* data = b.heap_data;
+            size_t remaining = b.capacity;
+            while (remaining >= 8) {
+                uint64_t k1;
+                std::memcpy(&k1, data, 8);
+                k1 *= PRIME2; k1 = (k1 << 31) | (k1 >> 33); k1 *= PRIME1;
+                h ^= k1; h = (h << 27) | (h >> 37); h = h * PRIME1 + PRIME4;
+                data += 8;
+                remaining -= 8;
+            }
+            // Process remaining bytes
+            while (remaining > 0) {
+                h ^= (uint64_t)(*data) * PRIME5;
+                h = (h << 11) | (h >> 53);
+                h *= PRIME1;
+                data++;
+                remaining--;
+            }
         }
-        h ^= (uint64_t)b.size;
-        h *= fnv_prime;
+        
+        // Final mix
+        h ^= h >> 33;
+        h *= PRIME2;
+        h ^= h >> 29;
+        h *= PRIME3;
+        h ^= h >> 32;
+        
         return (size_t)h;
     }
 };
