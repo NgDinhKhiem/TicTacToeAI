@@ -32,11 +32,94 @@ enum CellState : uint8_t {
 };
 
 struct CompactBoard {
-    std::string data;
+    static constexpr size_t INLINE_CAPACITY = 16; // Inline storage for boards up to 8x8
+    
+    union {
+        uint8_t inline_data[INLINE_CAPACITY];
+        uint8_t* heap_data;
+    };
     uint16_t size;
-
-    CompactBoard() : size(0) {}
-    CompactBoard(int board_size, int bytes_per_board) : data(bytes_per_board, '\0'), size((uint16_t)board_size) {}
+    uint16_t capacity;
+    
+    CompactBoard() : heap_data(nullptr), size(0), capacity(0) {}
+    
+    CompactBoard(int board_size, int bytes_per_board) : size((uint16_t)board_size), capacity((uint16_t)bytes_per_board) {
+        if (bytes_per_board <= INLINE_CAPACITY) {
+            std::memset(inline_data, 0, bytes_per_board);
+        } else {
+            heap_data = new uint8_t[bytes_per_board]();
+        }
+    }
+    
+    CompactBoard(const CompactBoard& other) : size(other.size), capacity(other.capacity) {
+        if (capacity <= INLINE_CAPACITY) {
+            std::memcpy(inline_data, other.inline_data, capacity);
+        } else {
+            heap_data = new uint8_t[capacity];
+            std::memcpy(heap_data, other.heap_data, capacity);
+        }
+    }
+    
+    CompactBoard(CompactBoard&& other) noexcept : size(other.size), capacity(other.capacity) {
+        if (capacity <= INLINE_CAPACITY) {
+            std::memcpy(inline_data, other.inline_data, capacity);
+        } else {
+            heap_data = other.heap_data;
+            other.heap_data = nullptr;
+            other.capacity = 0;
+        }
+        other.size = 0;
+    }
+    
+    CompactBoard& operator=(const CompactBoard& other) {
+        if (this != &other) {
+            if (capacity > INLINE_CAPACITY) {
+                delete[] heap_data;
+            }
+            size = other.size;
+            capacity = other.capacity;
+            if (capacity <= INLINE_CAPACITY) {
+                std::memcpy(inline_data, other.inline_data, capacity);
+            } else {
+                heap_data = new uint8_t[capacity];
+                std::memcpy(heap_data, other.heap_data, capacity);
+            }
+        }
+        return *this;
+    }
+    
+    CompactBoard& operator=(CompactBoard&& other) noexcept {
+        if (this != &other) {
+            if (capacity > INLINE_CAPACITY) {
+                delete[] heap_data;
+            }
+            size = other.size;
+            capacity = other.capacity;
+            if (capacity <= INLINE_CAPACITY) {
+                std::memcpy(inline_data, other.inline_data, capacity);
+            } else {
+                heap_data = other.heap_data;
+                other.heap_data = nullptr;
+                other.capacity = 0;
+            }
+            other.size = 0;
+        }
+        return *this;
+    }
+    
+    ~CompactBoard() {
+        if (capacity > INLINE_CAPACITY) {
+            delete[] heap_data;
+        }
+    }
+    
+    inline uint8_t* data_ptr() {
+        return (capacity <= INLINE_CAPACITY) ? inline_data : heap_data;
+    }
+    
+    inline const uint8_t* data_ptr() const {
+        return (capacity <= INLINE_CAPACITY) ? inline_data : heap_data;
+    }
 
     inline void set_cell(int row, int col, CellState state) {
         int cell_index = row * size + col;
@@ -44,17 +127,18 @@ struct CompactBoard {
         int byte_index = bit_position >> 3;
         int bit_offset = bit_position & 7;
 
+        uint8_t* data = data_ptr();
         uint8_t mask = uint8_t(3u << bit_offset);
         uint8_t val = uint8_t(uint8_t(state) << bit_offset);
 
-        data[byte_index] = char((uint8_t)data[byte_index] & ~mask);
-        data[byte_index] = char((uint8_t)data[byte_index] | val);
+        data[byte_index] = (data[byte_index] & ~mask);
+        data[byte_index] = (data[byte_index] | val);
 
         if (bit_offset > 6) {
             uint8_t nextMask = 1u;
             uint8_t nextVal = uint8_t(uint8_t(state) >> 1);
-            data[byte_index + 1] = char((uint8_t)data[byte_index + 1] & ~nextMask);
-            data[byte_index + 1] = char((uint8_t)data[byte_index + 1] | nextVal);
+            data[byte_index + 1] = (data[byte_index + 1] & ~nextMask);
+            data[byte_index + 1] = (data[byte_index + 1] | nextVal);
         }
     }
 
@@ -64,20 +148,23 @@ struct CompactBoard {
         int byte_index = bit_position >> 3;
         int bit_offset = bit_position & 7;
 
-        uint8_t value = (uint8_t(data[byte_index]) >> bit_offset) & 3u;
+        const uint8_t* data = data_ptr();
+        uint8_t value = (data[byte_index] >> bit_offset) & 3u;
         if (bit_offset > 6) {
-            value |= (uint8_t(data[byte_index + 1]) & 1u) << 1;
+            value |= (data[byte_index + 1] & 1u) << 1;
         }
         return static_cast<CellState>(value);
     }
 
     bool operator==(const CompactBoard& other) const noexcept {
-        return size == other.size && data == other.data;
+        if (size != other.size || capacity != other.capacity) return false;
+        return std::memcmp(data_ptr(), other.data_ptr(), capacity) == 0;
     }
 
     bool operator<(const CompactBoard& other) const noexcept {
         if (size != other.size) return size < other.size;
-        return data < other.data;
+        if (capacity != other.capacity) return capacity < other.capacity;
+        return std::memcmp(data_ptr(), other.data_ptr(), capacity) < 0;
     }
 };
 
@@ -87,8 +174,9 @@ struct CompactBoardHash {
         const uint64_t fnv_offset = 14695981039346656037ull;
         const uint64_t fnv_prime  = 1099511628211ull;
         uint64_t h = fnv_offset;
-        for (unsigned char c : b.data) {
-            h ^= (uint64_t)c;
+        const uint8_t* data = b.data_ptr();
+        for (size_t i = 0; i < b.capacity; ++i) {
+            h ^= (uint64_t)data[i];
             h *= fnv_prime;
         }
         h ^= (uint64_t)b.size;
@@ -330,7 +418,7 @@ public:
     }
 
     void append_board_binary(const CompactBoard &b) {
-        const unsigned char* ptr = reinterpret_cast<const unsigned char*>(b.data.data());
+        const uint8_t* ptr = b.data_ptr();
         write_buffer.insert(write_buffer.end(), ptr, ptr + bytes_per_board);
         if (write_buffer.size() >= bytes_per_board * config.buffer_size) {
             flush();
