@@ -1,8 +1,32 @@
 # C++ compiled files
 *.o
+*.obj
 *.exe
+*.out
+*.app
 state_generation
+state_generation_win
+verifier
 Dataset/state_generation
+Dataset/state_generation_win
+Dataset/verifier
+
+# C++ libraries
+*.a
+*.lib
+*.so
+*.dylib
+*.dll
+
+# C++ debug files
+*.dSYM/
+*.su
+*.idb
+*.pdb
+
+# C++ precompiled headers
+*.gch
+*.pch
 
 # Output data
 data/
