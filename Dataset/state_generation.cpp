@@ -1,58 +1,119 @@
+// generate_boards_memopt.cpp
 #include <iostream>
 #include <vector>
-#include <string>
 #include <unordered_set>
-#include <queue>
 #include <fstream>
 #include <thread>
 #include <mutex>
 #include <atomic>
 #include <algorithm>
-#include <sstream>
 #include <chrono>
 #include <iomanip>
-#include <cmath>
-#include <memory>
-
-#include <map>
+#include <cstring>
+#include <string>
+#include <sstream>
+#include <functional>
 
 struct Config {
     int board_size = 3;
-    int n_workers = 7;
+    int n_workers = 1;
     size_t chunk_size = 2000000;
     size_t buffer_size = 5000;
     int batch_size_divisor = 2;
     int min_batch_size = 50;
-    std::string output_file = "data/unique_cpp.txt";
-    char empty_token = '-';
-    std::vector<char> player_tokens = {'X', 'O'};
+    std::string output_file = "data/unique_cpp.bin";
 };
 
-// Global configuration
 Config config;
 
-// Board type definitions
-using Board = std::vector<std::string>;
-using BoardStr = std::string;
+enum CellState : uint8_t {
+    EMPTY = 0,
+    X_CELL = 1,
+    O_CELL = 2
+};
 
-// Statistics
+struct CompactBoard {
+    std::string data;
+    uint16_t size;
+
+    CompactBoard() : size(0) {}
+    CompactBoard(int board_size, int bytes_per_board) : data(bytes_per_board, '\0'), size((uint16_t)board_size) {}
+
+    inline void set_cell(int row, int col, CellState state) {
+        int cell_index = row * size + col;
+        int bit_position = cell_index * 2;
+        int byte_index = bit_position >> 3;
+        int bit_offset = bit_position & 7;
+
+        uint8_t mask = uint8_t(3u << bit_offset);
+        uint8_t val = uint8_t(uint8_t(state) << bit_offset);
+
+        data[byte_index] = char((uint8_t)data[byte_index] & ~mask);
+        data[byte_index] = char((uint8_t)data[byte_index] | val);
+
+        if (bit_offset > 6) {
+            uint8_t nextMask = 1u;
+            uint8_t nextVal = uint8_t(uint8_t(state) >> 1);
+            data[byte_index + 1] = char((uint8_t)data[byte_index + 1] & ~nextMask);
+            data[byte_index + 1] = char((uint8_t)data[byte_index + 1] | nextVal);
+        }
+    }
+
+    inline CellState get_cell(int row, int col) const {
+        int cell_index = row * size + col;
+        int bit_position = cell_index * 2;
+        int byte_index = bit_position >> 3;
+        int bit_offset = bit_position & 7;
+
+        uint8_t value = (uint8_t(data[byte_index]) >> bit_offset) & 3u;
+        if (bit_offset > 6) {
+            value |= (uint8_t(data[byte_index + 1]) & 1u) << 1;
+        }
+        return static_cast<CellState>(value);
+    }
+
+    bool operator==(const CompactBoard& other) const noexcept {
+        return size == other.size && data == other.data;
+    }
+
+    bool operator<(const CompactBoard& other) const noexcept {
+        if (size != other.size) return size < other.size;
+        return data < other.data;
+    }
+};
+
+struct CompactBoardHash {
+    size_t operator()(const CompactBoard& b) const noexcept {
+        // 64-bit FNV-1a
+        const uint64_t fnv_offset = 14695981039346656037ull;
+        const uint64_t fnv_prime  = 1099511628211ull;
+        uint64_t h = fnv_offset;
+        for (unsigned char c : b.data) {
+            h ^= (uint64_t)c;
+            h *= fnv_prime;
+        }
+        h ^= (uint64_t)b.size;
+        h *= fnv_prime;
+        return (size_t)h;
+    }
+};
+
 struct Statistics {
     std::atomic<size_t> wins{0};
     std::atomic<size_t> draws{0};
     std::atomic<size_t> ongoing{0};
     std::atomic<size_t> unique_boards{0};
-};
+} global_stats;
 
-Statistics global_stats;
 std::mutex cout_mutex;
 std::mutex file_mutex;
 std::mutex seen_mutex;
 
-// Simple JSON parser
-std::string trim(const std::string& str) {
+static inline std::string trim(const std::string& str) {
     size_t first = str.find_first_not_of(" \t\n\r\"");
     if (first == std::string::npos) return "";
     size_t last = str.find_last_not_of(" \t\n\r\",");
+    if (last == std::string::npos) last = str.size() - 1;
     return str.substr(first, (last - first + 1));
 }
 
@@ -62,429 +123,392 @@ void load_config(const std::string& filename) {
         std::cout << "Config file not found, using defaults." << std::endl;
         return;
     }
-
     std::string line;
     while (std::getline(file, line)) {
         size_t colon = line.find(':');
         if (colon == std::string::npos) continue;
-        
         std::string key = trim(line.substr(0, colon));
         std::string value = trim(line.substr(colon + 1));
-        
         if (key == "board_size") config.board_size = std::stoi(value);
-        else if (key == "n_workers") config.n_workers = std::stoi(value);
+        else if (key == "n_workers") config.n_workers = std::max(1, std::stoi(value));
         else if (key == "chunk_size") config.chunk_size = std::stoull(value);
         else if (key == "buffer_size") config.buffer_size = std::stoull(value);
         else if (key == "batch_size_divisor") config.batch_size_divisor = std::stoi(value);
         else if (key == "min_batch_size") config.min_batch_size = std::stoi(value);
         else if (key == "output_file") config.output_file = value;
-        else if (key == "empty_token") {
-            if (!value.empty()) config.empty_token = value[0];
-        }
     }
 }
 
-// Board utilities
-BoardStr hash_board(const Board& board) {
-    std::string result;
-    for (const auto& row : board) {
-        result += row;
-    }
-    return result;
-}
-
-Board string_to_board(const BoardStr& str, int size) {
-    Board board(size);
-    for (int i = 0; i < size; i++) {
-        board[i] = str.substr(i * size, size);
-    }
-    return board;
-}
-
-Board rotate_90(const Board& board) {
-    int n = board.size();
-    Board rotated(n, std::string(n, config.empty_token));
-    for (int i = 0; i < n; i++) {
-        for (int j = 0; j < n; j++) {
-            rotated[i][j] = board[n - 1 - j][i];
+CompactBoard rotate_90(const CompactBoard& board, int bytes_per_board) {
+    int n = board.size;
+    CompactBoard rotated(n, bytes_per_board);
+    for (int i = 0; i < n; ++i) {
+        for (int j = 0; j < n; ++j) {
+            rotated.set_cell(i, j, board.get_cell(n - 1 - j, i));
         }
     }
     return rotated;
 }
 
-Board flip_horizontal(const Board& board) {
-    Board flipped = board;
-    for (auto& row : flipped) {
-        std::reverse(row.begin(), row.end());
+CompactBoard flip_horizontal(const CompactBoard& board, int bytes_per_board) {
+    int n = board.size;
+    CompactBoard flipped(n, bytes_per_board);
+    for (int i = 0; i < n; ++i) {
+        for (int j = 0; j < n; ++j) {
+            flipped.set_cell(i, j, board.get_cell(i, n - 1 - j));
+        }
     }
     return flipped;
 }
 
-std::vector<Board> get_all_symmetries(const Board& board) {
-    std::vector<Board> variants;
-    Board current = board;
-    
-    // 4 rotations
-    for (int i = 0; i < 4; i++) {
-        variants.push_back(current);
-        current = rotate_90(current);
+CompactBoard get_canonical_form(const CompactBoard& board, int bytes_per_board) {
+    std::vector<CompactBoard> variants;
+    variants.reserve(8);
+
+    CompactBoard cur = board;
+    for (int k = 0; k < 4; ++k) {
+        variants.emplace_back(std::move(cur));
+        cur = rotate_90(variants.back(), bytes_per_board); // rotate last element
     }
-    
-    // 4 rotations of horizontal flip
-    Board flipped = flip_horizontal(board);
-    current = flipped;
-    for (int i = 0; i < 4; i++) {
-        variants.push_back(current);
-        current = rotate_90(current);
+    CompactBoard flipped = flip_horizontal(board, bytes_per_board);
+    cur = flipped;
+    for (int k = 0; k < 4; ++k) {
+        variants.emplace_back(std::move(cur));
+        cur = rotate_90(variants.back(), bytes_per_board);
     }
-    
-    return variants;
+
+    CompactBoard const* best = &variants[0];
+    for (size_t i = 1; i < variants.size(); ++i) {
+        if (variants[i] < *best) best = &variants[i];
+    }
+    return *best;
 }
 
-BoardStr get_canonical_form(const Board& board) {
-    auto symmetries = get_all_symmetries(board);
-    std::vector<BoardStr> hashes;
-    for (const auto& sym : symmetries) {
-        hashes.push_back(hash_board(sym));
-    }
-    return *std::min_element(hashes.begin(), hashes.end());
-}
-
-// Game logic
-bool check_line(const std::vector<char>& line, int win_len) {
+inline bool check_line_run(const CompactBoard& board, int win_len, int start_r, int start_c, int dr, int dc, int steps) {
+    uint8_t prev = 0;
     int count = 0;
-    char prev = '\0';
-    
-    for (char token : line) {
-        if (token == config.empty_token) {
-            prev = '\0';
+    for (int s = 0; s < steps; ++s) {
+        int r = start_r + s * dr;
+        int c = start_c + s * dc;
+        uint8_t cell = uint8_t(board.get_cell(r, c));
+        if (cell == 0) {
+            prev = 0;
             count = 0;
             continue;
         }
-        if (token == prev) {
-            count++;
+        if (cell == prev) {
+            ++count;
             if (count >= win_len) return true;
         } else {
-            prev = token;
+            prev = cell;
             count = 1;
         }
     }
     return false;
 }
 
-bool is_board_ended(const Board& board) {
-    int n = board.size();
+bool is_board_ended(const CompactBoard& board) {
+    int n = board.size;
     int win_len = std::min(n, 5);
-    
-    // Check rows
-    for (int i = 0; i < n; i++) {
-        std::vector<char> row(board[i].begin(), board[i].end());
-        if (check_line(row, win_len)) return true;
+
+    // rows
+    for (int r = 0; r < n; ++r) {
+        if (check_line_run(board, win_len, r, 0, 0, 1, n)) return true;
     }
-    
-    // Check columns
-    for (int i = 0; i < n; i++) {
-        std::vector<char> col;
-        for (int j = 0; j < n; j++) {
-            col.push_back(board[j][i]);
+    // cols
+    for (int c = 0; c < n; ++c) {
+        if (check_line_run(board, win_len, 0, c, 1, 0, n)) return true;
+    }
+    // diagonals TL-BR
+    for (int start = 0; start <= 2 * (n - 1); ++start) {
+        int r0 = std::max(0, start - (n - 1));
+        int c0 = start - r0;
+        int steps = std::min(n - r0, c0 + 1);
+        if (steps >= win_len) {
+            if (check_line_run(board, win_len, r0, c0, 1, -1, steps)) return true;
         }
-        if (check_line(col, win_len)) return true;
     }
-    
-    // Check diagonals (top-left to bottom-right)
-    for (int p = 0; p < n * 2 - 1; p++) {
-        std::vector<char> diag;
-        for (int i = std::max(0, p - n + 1); i < std::min(p + 1, n); i++) {
-            int j = p - i;
-            if (j >= 0 && j < n) {
-                diag.push_back(board[i][j]);
-            }
+    // diagonals TR-BL
+    for (int start = - (n - 1); start <= (n - 1); ++start) {
+        int r0 = std::max(0, start);
+        int c0 = r0 - start;
+        int steps = std::min(n - r0, n - c0);
+        if (steps >= win_len) {
+            if (check_line_run(board, win_len, r0, c0, 1, 1, steps)) return true;
         }
-        if (diag.size() >= (size_t)win_len && check_line(diag, win_len)) return true;
     }
-    
-    // Check diagonals (top-right to bottom-left)
-    for (int p = -n + 1; p < n; p++) {
-        std::vector<char> diag;
-        for (int i = std::max(0, p); i < std::min(n, n + p); i++) {
-            int j = i - p;
-            if (j >= 0 && j < n) {
-                diag.push_back(board[i][j]);
-            }
-        }
-        if (diag.size() >= (size_t)win_len && check_line(diag, win_len)) return true;
-    }
-    
+
     return false;
 }
 
-bool is_board_full(const Board& board) {
-    for (const auto& row : board) {
-        for (char cell : row) {
-            if (cell == config.empty_token) return false;
-        }
-    }
+bool is_board_full(const CompactBoard& board) {
+    int n = board.size;
+    int total = n * n;
+    int bytes = (total * 2 + 7) / 8;
+    for (int i = 0; i < n; ++i)
+        for (int j = 0; j < n; ++j)
+            if (board.get_cell(i, j) == EMPTY) return false;
     return true;
 }
 
-std::pair<int, int> count_tokens(const Board& board) {
-    int x_count = 0, o_count = 0;
-    for (const auto& row : board) {
-        for (char cell : row) {
-            if (cell == 'X') x_count++;
-            else if (cell == 'O') o_count++;
+std::pair<int,int> count_tokens(const CompactBoard& board) {
+    int x = 0, o = 0;
+    int n = board.size;
+    for (int i = 0; i < n; ++i)
+        for (int j = 0; j < n; ++j) {
+            auto v = board.get_cell(i, j);
+            if (v == X_CELL) ++x;
+            else if (v == O_CELL) ++o;
         }
-    }
-    return {x_count, o_count};
+    return {x, o};
 }
 
-// Batch processing result
+// Batch result: lightweight
 struct BatchResult {
     size_t wins = 0;
     size_t draws = 0;
     size_t ongoing = 0;
-    std::vector<BoardStr> new_children;
+    std::vector<CompactBoard> new_children;
 };
 
-BatchResult process_batch(const std::vector<Board>& boards) {
-    BatchResult result;
-    
+// Process a batch producing canonical children but dedup within this batch
+BatchResult process_batch(const std::vector<CompactBoard>& boards, int bytes_per_board) {
+    BatchResult res;
+    std::unordered_set<CompactBoard, CompactBoardHash> local_set;
+    local_set.reserve(boards.size() * 4 + 16);
+
     for (const auto& board : boards) {
         bool has_winner = is_board_ended(board);
-        bool is_full = is_board_full(board);
-        bool game_ended = has_winner || is_full;
-        
-        if (game_ended) {
-            if (has_winner) {
-                result.wins++;
-            } else {
-                result.draws++;
-            }
+        bool full = is_board_full(board);
+        if (has_winner || full) {
+            if (has_winner) ++res.wins;
+            else ++res.draws;
             continue;
         }
-        
-        // Ongoing game - generate children
-        result.ongoing++;
-        auto [x_count, o_count] = count_tokens(board);
-        char current_token = (x_count == o_count) ? 'X' : 'O';
-        
-        for (size_t i = 0; i < board.size(); i++) {
-            for (size_t j = 0; j < board[i].size(); j++) {
-                if (board[i][j] == config.empty_token) {
-                    Board new_board = board;
-                    new_board[i][j] = current_token;
-                    
-                    BoardStr canonical = get_canonical_form(new_board);
-                    result.new_children.push_back(canonical);
+        ++res.ongoing;
+        auto [xc, oc] = count_tokens(board);
+        CellState turn = (xc == oc) ? X_CELL : O_CELL;
+        int n = board.size;
+
+        for (int r = 0; r < n; ++r) {
+            for (int c = 0; c < n; ++c) {
+                if (board.get_cell(r, c) != EMPTY) continue;
+                CompactBoard child = board;
+                child.set_cell(r, c, turn);
+                CompactBoard canonical = get_canonical_form(child, bytes_per_board);
+
+                auto it = local_set.find(canonical);
+                if (it == local_set.end()) {
+                    local_set.emplace(std::move(canonical));
                 }
             }
         }
     }
-    
-    return result;
+
+    res.new_children.reserve(local_set.size());
+    for (auto &b : local_set) {
+        res.new_children.push_back(std::move(const_cast<CompactBoard&>(b)));
+    }
+    return res;
 }
 
-// Board state manager
+// BoardStateMap: writes binary boards in buffered manner (single large byte buffer)
 class BoardStateMap {
-private:
-    std::vector<BoardStr> buffer;
     std::ofstream file;
     int board_size;
-    
+    int bytes_per_board;
+    std::vector<uint8_t> write_buffer;
 public:
-    BoardStateMap(const std::string& filename, int size) : board_size(size) {
-        file.open(filename, std::ios::trunc);
-        buffer.reserve(config.buffer_size);
+    BoardStateMap(const std::string &filename, int size, int bytesPerBoard)
+        : board_size(size), bytes_per_board(bytesPerBoard)
+    {
+        file.open(filename, std::ios::binary | std::ios::trunc);
+        if (!file.is_open()) throw std::runtime_error("Cannot open output file");
+        uint32_t header[2] = {static_cast<uint32_t>(board_size), static_cast<uint32_t>(bytes_per_board)};
+        file.write(reinterpret_cast<const char*>(header), sizeof(header));
+        write_buffer.reserve((size_t)bytes_per_board * std::min<size_t>(config.buffer_size, 1024));
     }
-    
-    void add_to_buffer(const BoardStr& board_str) {
-        std::lock_guard<std::mutex> lock(file_mutex);
-        buffer.push_back(board_str);
-        if (buffer.size() >= config.buffer_size) {
+
+    void append_board_binary(const CompactBoard &b) {
+        const unsigned char* ptr = reinterpret_cast<const unsigned char*>(b.data.data());
+        write_buffer.insert(write_buffer.end(), ptr, ptr + bytes_per_board);
+        if (write_buffer.size() >= bytes_per_board * config.buffer_size) {
             flush();
         }
     }
-    
+
     void flush() {
-        if (!buffer.empty()) {
-            for (const auto& board_str : buffer) {
-                // Write board in readable format (rows separated by spaces)
-                for (int i = 0; i < board_size; i++) {
-                    file << board_str.substr(i * board_size, board_size);
-                    if (i < board_size - 1) {
-                        file << " ";
-                    }
-                }
-                file << '\n';
-            }
-            buffer.clear();
-        }
+        if (write_buffer.empty()) return;
+        file.write(reinterpret_cast<const char*>(write_buffer.data()), write_buffer.size());
+        write_buffer.clear();
     }
-    
+
     void close() {
-        std::lock_guard<std::mutex> lock(file_mutex);
         flush();
-        file.close();
+        if (file.is_open()) file.close();
     }
-    
+
     ~BoardStateMap() {
-        if (file.is_open()) {
-            flush();
-            file.close();
-        }
+        if (file.is_open()) close();
     }
 };
 
-// Progress display
-void display_progress(size_t processed, size_t queue_size, 
-                     const std::chrono::steady_clock::time_point& start_time) {
+void display_progress(size_t processed, size_t queue_size,
+                      const std::chrono::steady_clock::time_point& start_time)
+{
     auto now = std::chrono::steady_clock::now();
     auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - start_time).count();
-    
     std::lock_guard<std::mutex> lock(cout_mutex);
-    std::cout << "\rProcessed: " << processed 
+    std::cout << "\rProcessed: " << processed
               << " | Queue: " << queue_size
-              << " | Wins: " << global_stats.wins 
+              << " | Wins: " << global_stats.wins
               << " | Draws: " << global_stats.draws
               << " | Ongoing: " << global_stats.ongoing
               << " | Unique: " << global_stats.unique_boards
-              << " | Time: " << elapsed << "s" << std::flush;
+              << " | Time: " << elapsed << "s"
+              << std::flush;
 }
 
-// Main generation function
 void generate_all_boards() {
-    std::cout << "Using " << config.n_workers << " worker threads" << std::endl;
-    std::cout << "Chunk size: " << config.chunk_size << " states per iteration" << std::endl;
-    std::cout << "Board size: " << config.board_size << "x" << config.board_size << std::endl;
-    
-    // Add SIZE prefix to filename
+    std::cout << "Memory-priority generation\n";
+    std::cout << "Workers: " << config.n_workers << "\n";
+    std::cout << "Board size: " << config.board_size << "x" << config.board_size << "\n";
+
+    int cells = config.board_size * config.board_size;
+    int bits_per_board = cells * 2;
+    int bytes_per_board = (bits_per_board + 7) / 8;
+    std::cout << "Bytes per board: " << bytes_per_board << "\n";
+
     std::string output_filename = config.output_file;
-    size_t ext_pos = output_filename.find_last_of('.');
-    if (ext_pos != std::string::npos) {
-        output_filename = output_filename.substr(0, ext_pos) + "_SIZE" + 
-                         std::to_string(config.board_size) + output_filename.substr(ext_pos);
+    size_t pos = output_filename.find_last_of('.');
+    if (pos != std::string::npos) {
+        output_filename = output_filename.substr(0, pos) + "_SIZE" + std::to_string(config.board_size) + output_filename.substr(pos);
     } else {
         output_filename += "_SIZE" + std::to_string(config.board_size);
     }
-    
-    std::unordered_set<BoardStr> seen_canonical;
-    BoardStateMap board_map(output_filename, config.board_size);
-    
-    // Initialize with empty board
-    Board empty_board(config.board_size, std::string(config.board_size, config.empty_token));
-    BoardStr empty_canonical = get_canonical_form(empty_board);
-    
-    std::vector<BoardStr> current_queue = {empty_canonical};
-    seen_canonical.insert(empty_canonical);
-    global_stats.unique_boards = 1;
-    
+
+    std::unordered_set<CompactBoard, CompactBoardHash> seen;
+    seen.reserve(1024);
+
+    BoardStateMap board_map(output_filename, config.board_size, bytes_per_board);
+
+    CompactBoard empty(config.board_size, bytes_per_board);
+    CompactBoard empty_canonical = get_canonical_form(empty, bytes_per_board);
+
+    std::vector<CompactBoard> current_queue;
+    current_queue.reserve(1024);
+    current_queue.push_back(empty_canonical);
+    seen.emplace(empty_canonical);
+    global_stats.unique_boards = seen.size();
+
     size_t total_processed = 0;
     auto start_time = std::chrono::steady_clock::now();
-    
+
     while (!current_queue.empty()) {
-        // Get chunk to process
-        size_t chunk_end = std::min(config.chunk_size, current_queue.size());
-        std::vector<BoardStr> process_chunk(
-            current_queue.begin(), 
-            current_queue.begin() + chunk_end
-        );
-        current_queue.erase(current_queue.begin(), current_queue.begin() + chunk_end);
-        
-        std::vector<Board> boards_to_process;
-        boards_to_process.reserve(process_chunk.size());
-        for (const auto& canonical : process_chunk) {
-            boards_to_process.push_back(string_to_board(canonical, config.board_size));
+        size_t take = std::min(config.chunk_size, current_queue.size());
+        std::vector<CompactBoard> chunk;
+        chunk.reserve(take);
+        for (size_t i = 0; i < take; ++i) {
+            chunk.push_back(std::move(current_queue[i]));
         }
-        
-        size_t batch_size = std::max(
-            (size_t)config.min_batch_size, 
-            boards_to_process.size() / (config.n_workers * config.batch_size_divisor)
-        );
-        
-        std::vector<std::vector<Board>> batches;
-        for (size_t i = 0; i < boards_to_process.size(); i += batch_size) {
-            size_t end = std::min(i + batch_size, boards_to_process.size());
-            batches.emplace_back(boards_to_process.begin() + i, boards_to_process.begin() + end);
+        current_queue.erase(current_queue.begin(), current_queue.begin() + take);
+
+        size_t batch_size = std::max((size_t)config.min_batch_size, chunk.size() / ( (size_t)config.n_workers * (size_t)config.batch_size_divisor ));
+        if (batch_size == 0) batch_size = chunk.size();
+
+        std::vector<std::pair<size_t,size_t>> batch_ranges;
+        for (size_t i = 0; i < chunk.size(); i += batch_size) {
+            size_t end = std::min(chunk.size(), i + batch_size);
+            batch_ranges.emplace_back(i, end);
         }
-        
+
+        std::vector<BatchResult> results(batch_ranges.size());
         std::vector<std::thread> threads;
-        std::vector<BatchResult> results(batches.size());
-        
-        for (size_t i = 0; i < batches.size(); i++) {
-            threads.emplace_back([&batches, &results, i]() {
-                results[i] = process_batch(batches[i]);
+        threads.reserve(batch_ranges.size());
+
+        for (size_t bi = 0; bi < batch_ranges.size(); ++bi) {
+            size_t bstart = batch_ranges[bi].first;
+            size_t bend   = batch_ranges[bi].second;
+            threads.emplace_back([bstart,bend,&chunk,&results,bi,bytes_per_board]() {
+                std::vector<CompactBoard> view;
+                view.reserve(bend - bstart);
+                for (size_t t = bstart; t < bend; ++t) view.push_back(chunk[t]);
+                results[bi] = process_batch(view, bytes_per_board);
             });
-            
-            // Limit active threads
+
             if (threads.size() >= (size_t)config.n_workers) {
-                for (auto& t : threads) {
-                    if (t.joinable()) t.join();
-                }
+                for (auto &t : threads) if (t.joinable()) t.join();
                 threads.clear();
             }
         }
-        
-        for (auto& t : threads) {
-            if (t.joinable()) t.join();
-        }
-        
-        std::vector<BoardStr> all_new_children;
-        for (const auto& result : results) {
-            global_stats.wins += result.wins;
-            global_stats.draws += result.draws;
-            global_stats.ongoing += result.ongoing;
-            all_new_children.insert(all_new_children.end(), 
-                                   result.new_children.begin(), 
-                                   result.new_children.end());
-        }
-        
-        std::vector<BoardStr> unique_new;
-        for (const auto& canonical : all_new_children) {
-            std::lock_guard<std::mutex> lock(seen_mutex);
-            if (seen_canonical.find(canonical) == seen_canonical.end()) {
-                seen_canonical.insert(canonical);
-                unique_new.push_back(canonical);
-                board_map.add_to_buffer(canonical);
+        for (auto &t : threads) if (t.joinable()) t.join();
+
+        std::vector<CompactBoard> new_unique_batch;
+        size_t batch_wins = 0, batch_draws = 0, batch_ongoing = 0;
+        size_t approx_new_children = 0;
+        for (auto &r : results) approx_new_children += r.new_children.size();
+        new_unique_batch.reserve(approx_new_children);
+
+        std::unordered_set<CompactBoard, CompactBoardHash> local_union;
+        local_union.reserve(approx_new_children + 16);
+
+        for (auto &r : results) {
+            batch_wins += r.wins;
+            batch_draws += r.draws;
+            batch_ongoing += r.ongoing;
+            for (auto &c : r.new_children) {
+                local_union.emplace(std::move(c));
             }
         }
-        
-        global_stats.unique_boards = seen_canonical.size();
-        current_queue.insert(current_queue.end(), unique_new.begin(), unique_new.end());
-        
-        total_processed += process_chunk.size();
+
+        {
+            std::lock_guard<std::mutex> lock(seen_mutex);
+            for (auto &cand : local_union) {
+                if (seen.find(cand) == seen.end()) {
+                    // new unique
+                    seen.emplace(cand);
+                    new_unique_batch.push_back(cand);
+                    board_map.append_board_binary(cand);
+                }
+            }
+            global_stats.unique_boards = seen.size();
+        }
+
+        global_stats.wins += batch_wins;
+        global_stats.draws += batch_draws;
+        global_stats.ongoing += batch_ongoing;
+
+        if (!new_unique_batch.empty()) {
+            current_queue.insert(current_queue.end(), std::make_move_iterator(new_unique_batch.begin()), std::make_move_iterator(new_unique_batch.end()));
+        }
+
+        total_processed += take;
         display_progress(total_processed, current_queue.size(), start_time);
     }
-    
+
     board_map.close();
-    
+
     std::cout << "\n" << std::string(60, '=') << std::endl;
     std::cout << "Total unique boards: " << global_stats.unique_boards << std::endl;
     std::cout << "  Wins: " << global_stats.wins << std::endl;
     std::cout << "  Draws: " << global_stats.draws << std::endl;
     std::cout << "  Ongoing: " << global_stats.ongoing << std::endl;
-    std::cout << "Output written to: " << output_filename << std::endl;
+    std::cout << "File written to: " << output_filename << " (binary format)\n";
     std::cout << std::string(60, '=') << std::endl;
 }
 
 int main(int argc, char* argv[]) {
-    std::string config_file = "config.json";
-    if (argc > 1) {
-        config_file = argv[1];
-    }
-    
+    std::string config_file = "Dataset/config.json";
+    if (argc > 1) config_file = argv[1];
+
     std::cout << "Loading configuration from: " << config_file << std::endl;
     load_config(config_file);
-    
-    std::cout << "\nStarting board generation..." << std::endl;
+
+    std::cout << "Starting board generation (Memory-optimized)..." << std::endl;
     auto start = std::chrono::steady_clock::now();
-    
     generate_all_boards();
-    
     auto end = std::chrono::steady_clock::now();
-    auto duration = std::chrono::duration_cast<std::chrono::seconds>(end - start).count();
-    
-    std::cout << "\nTotal time: " << duration << " seconds" << std::endl;
-    
+    auto dur = std::chrono::duration_cast<std::chrono::seconds>(end - start).count();
+    std::cout << "Total time: " << dur << " seconds\n";
     return 0;
 }
-
