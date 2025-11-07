@@ -5,3 +5,4 @@ jupyterlab==4.3.1
 ipykernel==6.29.5
 torch>=2.0.0
 torchvision>=0.15.0
+clickhouse-driver==0.2.7

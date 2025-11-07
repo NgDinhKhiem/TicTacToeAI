@@ -29,6 +29,14 @@ RUN apt-get update && \
         > /etc/apt/sources.list.d/deadsnakes.list && \
     apt-get update
 
+# Add ClickHouse Repository
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends apt-transport-https && \
+    curl -fsSL 'https://packages.clickhouse.com/rpm/lts/repodata/repomd.xml.key' | gpg --dearmor -o /etc/apt/keyrings/clickhouse-keyring.gpg && \
+    echo "deb [signed-by=/etc/apt/keyrings/clickhouse-keyring.gpg] https://packages.clickhouse.com/deb stable main" \
+        > /etc/apt/sources.list.d/clickhouse.list && \
+    apt-get update
+
 
 # --- Install Specific Versions ---
 # Note: Ubuntu 22.04 has GCC 12 in default repositories, no PPA needed
@@ -38,7 +46,9 @@ RUN apt-get update && \
         python${PYTHON_VERSION}-venv \
         python3-pip \
         g++-${GCC_VERSION} \
-        gcc-${GCC_VERSION} && \
+        gcc-${GCC_VERSION} \
+        clickhouse-server \
+        clickhouse-client && \
     update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-${GCC_VERSION} 100 && \
     update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-${GCC_VERSION} 100 && \
     ln -sf /usr/bin/python${PYTHON_VERSION} /usr/bin/python && \
@@ -52,8 +62,23 @@ COPY requirements.txt .
 RUN python -m pip install --no-cache-dir --upgrade pip && \
     python -m pip install --no-cache-dir -r requirements.txt
 
-# Expose JupyterLab port
-EXPOSE 8888
+# Copy entrypoint script
+COPY docker-entrypoint.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
-# Start JupyterLab by default
-CMD ["jupyter", "lab", "--ip=0.0.0.0", "--port=8888", "--allow-root", "--ServerApp.token=", "--ServerApp.password=", "--ServerApp.disable_check_xsrf=True", "--ServerApp.open_browser=False"]
+# Copy ClickHouse configuration files
+COPY clickhouse-config.xml /etc/clickhouse-server/config.d/
+COPY clickhouse-users.xml /etc/clickhouse-server/users.d/
+
+# Create ClickHouse data directory and set permissions
+RUN mkdir -p /var/lib/clickhouse /var/log/clickhouse-server /etc/clickhouse-server/users.d /etc/clickhouse-server/config.d && \
+    chown -R clickhouse:clickhouse /var/lib/clickhouse /var/log/clickhouse-server
+
+# Define volumes for data persistence
+VOLUME ["/var/lib/clickhouse", "/var/log/clickhouse-server"]
+
+# Expose JupyterLab and ClickHouse ports
+EXPOSE 8888 9000 8123
+
+# Start both ClickHouse and JupyterLab
+CMD ["/usr/local/bin/docker-entrypoint.sh"]

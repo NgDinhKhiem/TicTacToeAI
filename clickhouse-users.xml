@@ -1,0 +1,28 @@
+<?xml version="1.0"?>
+<clickhouse>
+    <users>
+        <!-- Default user with no password (for local connections) -->
+        <default>
+            <password></password>
+            <networks>
+                <ip>::/0</ip>
+            </networks>
+            <profile>default</profile>
+            <quota>default</quota>
+        </default>
+        
+        <!-- Admin user with password -->
+        <admin>
+            <password>Helloworld</password>
+            <networks>
+                <ip>::/0</ip>
+            </networks>
+            <profile>default</profile>
+            <quota>default</quota>
+            <access_management>1</access_management>
+        </admin>
+    </users>
+</clickhouse>
+
+
+

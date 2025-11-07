@@ -1,0 +1,21 @@
+<?xml version="1.0"?>
+<clickhouse>
+    <!-- Listen on all interfaces (IPv4 only) -->
+    <listen_host>0.0.0.0</listen_host>
+    
+    <!-- HTTP port -->
+    <http_port>8123</http_port>
+    
+    <!-- Native protocol port -->
+    <tcp_port>9000</tcp_port>
+    
+    <!-- Logging -->
+    <logger>
+        <level>information</level>
+        <log>/var/log/clickhouse-server/clickhouse-server.log</log>
+        <errorlog>/var/log/clickhouse-server/clickhouse-server.err.log</errorlog>
+        <size>1000M</size>
+        <count>10</count>
+    </logger>
+</clickhouse>
+
