@@ -1,2 +1,8 @@
-# Auto detect text files and perform LF normalization
+# Shell scripts should always use LF (Unix) line endings
+*.sh text eol=lf
+
+# Batch files should use CRLF (Windows) line endings
+*.bat text eol=crlf
+
+# Default behavior: normalize line endings to LF on checkin
 * text=auto
