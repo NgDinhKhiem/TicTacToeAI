@@ -5,4 +5,3 @@ jupyterlab==4.3.1
 ipykernel==6.29.5
 torch==2.3.0
 clickhouse-driver==0.2.7
-flask==3.0.0

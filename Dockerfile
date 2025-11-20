@@ -67,9 +67,9 @@ WORKDIR /app
 
 # Copy requirements and install Python packages
 COPY requirements.txt .
-RUN python -m pip install --no-cache-dir --upgrade pip && \
-    python -m pip install --no-cache-dir -r requirements.txt && \
-    python -m pip install --upgrade --ignore-installed flask
+RUN python -m pip install --upgrade pip && \
+    python -m pip install -r requirements.txt
+    #python -m pip install --upgrade --ignore-installed flask
 
 # Copy application code (Statistic folder for API server, Demo folder for frontend)
 COPY Statistic/ ./Statistic/
