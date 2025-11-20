@@ -54,13 +54,26 @@ RUN apt-get update && \
     ln -sf /usr/bin/python${PYTHON_VERSION} /usr/bin/python && \
     rm -rf /var/lib/apt/lists/*
 
+# --- Install Node.js and PM2 ---
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends curl && \
+    curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
+    apt-get install -y --no-install-recommends nodejs && \
+    npm install -g pm2 && \
+    rm -rf /var/lib/apt/lists/*
+
 # Set working directory
 WORKDIR /app
 
 # Copy requirements and install Python packages
 COPY requirements.txt .
 RUN python -m pip install --no-cache-dir --upgrade pip && \
-    python -m pip install --no-cache-dir -r requirements.txt
+    python -m pip install --no-cache-dir -r requirements.txt && \
+    python -m pip install --upgrade --ignore-installed flask
+
+# Copy application code (Statistic folder for API server, Demo folder for frontend)
+COPY Statistic/ ./Statistic/
+COPY Demo/ ./Demo/
 
 # Copy entrypoint script and fix line endings (Windows CRLF -> Unix LF)
 COPY docker-entrypoint.sh /usr/local/bin/
@@ -78,8 +91,8 @@ RUN mkdir -p /var/lib/clickhouse /var/log/clickhouse-server /etc/clickhouse-serv
 # Define volumes for data persistence
 VOLUME ["/var/lib/clickhouse", "/var/log/clickhouse-server"]
 
-# Expose JupyterLab and ClickHouse ports
-EXPOSE 8888 9000 8123
+# Expose JupyterLab, ClickHouse, Node.js server, and Python API server ports
+EXPOSE 8888 9000 8123 3000 5000
 
 # Start both ClickHouse and JupyterLab
 CMD ["/usr/local/bin/docker-entrypoint.sh"]

@@ -1,0 +1,506 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tic-Tac-Toe AI Demo</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .container {
+            background: white;
+            border-radius: 20px;
+            padding: 30px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            max-width: 1200px;
+            width: 100%;
+        }
+
+        h1 {
+            text-align: center;
+            color: #333;
+            margin-bottom: 30px;
+            font-size: 2.5em;
+        }
+
+        .config-panel {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+            padding: 20px;
+            background: #f5f5f5;
+            border-radius: 10px;
+        }
+
+        .config-item {
+            display: flex;
+            flex-direction: column;
+        }
+
+        label {
+            font-weight: bold;
+            margin-bottom: 8px;
+            color: #555;
+        }
+
+        input, select {
+            padding: 10px;
+            border: 2px solid #ddd;
+            border-radius: 5px;
+            font-size: 16px;
+            transition: border-color 0.3s;
+        }
+
+        input:focus, select:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .button-group {
+            display: flex;
+            gap: 10px;
+            margin-top: 20px;
+            justify-content: center;
+        }
+
+        button {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 5px;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .btn-primary {
+            background: #667eea;
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: #5568d3;
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-secondary {
+            background: #6c757d;
+            color: white;
+        }
+
+        .btn-secondary:hover {
+            background: #5a6268;
+        }
+
+        .btn-danger {
+            background: #dc3545;
+            color: white;
+        }
+
+        .btn-danger:hover {
+            background: #c82333;
+        }
+
+        .board-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            margin: 30px 0;
+        }
+
+        .board {
+            display: grid;
+            gap: 2px;
+            background: #333;
+            padding: 2px;
+            border-radius: 5px;
+            max-width: 100%;
+            overflow-x: auto;
+        }
+
+        .cell {
+            width: 60px;
+            height: 60px;
+            background: white;
+            border: none;
+            font-size: 24px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .cell:hover:not(.disabled) {
+            background: #f0f0f0;
+            transform: scale(1.05);
+        }
+
+        .cell.disabled {
+            cursor: not-allowed;
+            opacity: 0.6;
+        }
+
+        .cell.x {
+            color: #e74c3c;
+        }
+
+        .cell.o {
+            color: #3498db;
+        }
+
+        .status {
+            margin-top: 20px;
+            padding: 15px;
+            border-radius: 5px;
+            text-align: center;
+            font-size: 18px;
+            font-weight: bold;
+        }
+
+        .status.info {
+            background: #d1ecf1;
+            color: #0c5460;
+        }
+
+        .status.success {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .status.error {
+            background: #f8d7da;
+            color: #721c24;
+        }
+
+        .status.warning {
+            background: #fff3cd;
+            color: #856404;
+        }
+
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid rgba(255, 255, 255, 0.3);
+            border-radius: 50%;
+            border-top-color: white;
+            animation: spin 1s ease-in-out infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        @media (max-width: 768px) {
+            .cell {
+                width: 50px;
+                height: 50px;
+                font-size: 20px;
+            }
+
+            h1 {
+                font-size: 2em;
+            }
+        }
+
+        @media (max-width: 480px) {
+            .cell {
+                width: 40px;
+                height: 40px;
+                font-size: 16px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎮 Tic-Tac-Toe AI Demo</h1>
+        
+        <div class="config-panel">
+            <div class="config-item">
+                <label for="boardSize">Board Size:</label>
+                <input type="number" id="boardSize" min="3" max="100" value="3">
+            </div>
+            <div class="config-item">
+                <label for="winLength">Win Length (in a row):</label>
+                <input type="number" id="winLength" min="3" max="100" value="3">
+            </div>
+            <div class="config-item">
+                <label for="firstPlayer">Who Goes First:</label>
+                <select id="firstPlayer">
+                    <option value="X">X (You)</option>
+                    <option value="O">O (AI)</option>
+                </select>
+            </div>
+            <div class="config-item">
+                <label for="aiPlayer">AI Plays As:</label>
+                <select id="aiPlayer">
+                    <option value="O">O</option>
+                    <option value="X">X</option>
+                </select>
+            </div>
+        </div>
+
+        <div class="button-group">
+            <button class="btn-primary" onclick="newGame()">New Game</button>
+            <button class="btn-secondary" onclick="getAIMove()">Get AI Move</button>
+            <button class="btn-danger" onclick="resetBoard()">Reset Board</button>
+        </div>
+
+        <div class="board-container">
+            <div id="board" class="board"></div>
+            <div id="status" class="status info" style="display: none;"></div>
+        </div>
+    </div>
+
+    <script>
+        // API Configuration - Use relative URL to go through Node.js proxy
+        // This avoids CORS issues and works in both local and Docker environments
+        const API_BASE_URL = '';
+        
+        let board = [];
+        let boardSize = 3;
+        let winLength = 3;
+        let currentPlayer = 'X';
+        let gameEnded = false;
+        let aiPlayer = 'O';
+        let firstPlayer = 'X';
+
+        function initBoard() {
+            boardSize = parseInt(document.getElementById('boardSize').value) || 3;
+            winLength = parseInt(document.getElementById('winLength').value) || 3;
+            aiPlayer = document.getElementById('aiPlayer').value;
+            firstPlayer = document.getElementById('firstPlayer').value;
+            currentPlayer = firstPlayer;
+            gameEnded = false;
+
+            // Validate win length
+            if (winLength > boardSize) {
+                winLength = boardSize;
+                document.getElementById('winLength').value = boardSize;
+            }
+
+            board = Array(boardSize).fill(null).map(() => Array(boardSize).fill('-'));
+            renderBoard();
+
+            if (firstPlayer === aiPlayer) {
+                setTimeout(() => getAIMove(), 500);
+            }
+
+            showStatus('Game started! ' + (firstPlayer === 'X' ? 'You' : 'AI') + ' goes first.', 'info');
+        }
+
+        function renderBoard() {
+            const boardElement = document.getElementById('board');
+            boardElement.style.gridTemplateColumns = `repeat(${boardSize}, 1fr)`;
+            boardElement.innerHTML = '';
+
+            for (let i = 0; i < boardSize; i++) {
+                for (let j = 0; j < boardSize; j++) {
+                    const cell = document.createElement('button');
+                    cell.className = 'cell';
+                    cell.dataset.row = i;
+                    cell.dataset.col = j;
+                    
+                    if (board[i][j] === 'X') {
+                        cell.textContent = 'X';
+                        cell.classList.add('x');
+                        cell.disabled = true;
+                        cell.classList.add('disabled');
+                    } else if (board[i][j] === 'O') {
+                        cell.textContent = 'O';
+                        cell.classList.add('o');
+                        cell.disabled = true;
+                        cell.classList.add('disabled');
+                    }
+
+                    if (!gameEnded && board[i][j] === '-') {
+                        cell.addEventListener('click', () => makeMove(i, j));
+                    } else {
+                        cell.classList.add('disabled');
+                    }
+
+                    boardElement.appendChild(cell);
+                }
+            }
+        }
+
+        function makeMove(row, col) {
+            if (gameEnded || board[row][col] !== '-') return;
+            if (currentPlayer === aiPlayer) {
+                showStatus('Wait for AI to make a move!', 'warning');
+                return;
+            }
+
+            board[row][col] = currentPlayer;
+            renderBoard();
+
+            if (checkWin(row, col)) {
+                gameEnded = true;
+                showStatus(`🎉 ${currentPlayer} wins!`, 'success');
+                return;
+            }
+
+            if (checkDraw()) {
+                gameEnded = true;
+                showStatus('🤝 It\'s a draw!', 'info');
+                return;
+            }
+
+            currentPlayer = currentPlayer === 'X' ? 'O' : 'X';
+            
+            if (currentPlayer === aiPlayer) {
+                showStatus('AI is thinking...', 'info');
+                setTimeout(() => getAIMove(), 500);
+            } else {
+                showStatus(`Your turn (${currentPlayer})`, 'info');
+            }
+        }
+
+        async function getAIMove() {
+            if (gameEnded) return;
+
+            showStatus('AI is thinking...', 'info');
+            
+            try {
+                const matrix = JSON.stringify(board);
+                console.log('Sending board to API:', matrix);
+                const url = `${API_BASE_URL}/api/move?boardSize=${boardSize}&winLength=${winLength}&nextMove=${aiPlayer}&matrix=${encodeURIComponent(matrix)}`;
+                console.log('API URL:', url);
+                
+                const response = await fetch(url);
+                const data = await response.json();
+                console.log('API Response:', data);
+
+                if (response.ok && data.row !== undefined && data.col !== undefined) {
+                    const row = data.row;
+                    const col = data.col;
+                    console.log(`AI move received: row=${row}, col=${col}, current board state:`, board);
+                    
+                    if (board[row][col] === '-') {
+                        board[row][col] = aiPlayer;
+                        console.log('Board updated with AI move:', board);
+                        renderBoard();
+
+                        if (checkWin(row, col)) {
+                            gameEnded = true;
+                            showStatus(`🤖 AI (${aiPlayer}) wins!`, 'error');
+                            return;
+                        }
+
+                        if (checkDraw()) {
+                            gameEnded = true;
+                            showStatus('🤝 It\'s a draw!', 'info');
+                            return;
+                        }
+
+                        currentPlayer = currentPlayer === 'X' ? 'O' : 'X';
+                        showStatus(`Your turn (${currentPlayer})`, 'info');
+                    } else {
+                        showStatus(`AI tried to make an invalid move. Please reset. (Debug: current state: ${board[row][col]} col: ${col} row: ${row})`, 'error');
+                    }
+                } else {
+                    showStatus('Error: ' + (data.error || 'Failed to get AI move'), 'error');
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                let errorMsg = 'Error connecting to API: ' + error.message;
+                if (error.message.includes('Failed to fetch') || error.message.includes('NetworkError')) {
+                    errorMsg = 'Cannot connect to server. Make sure both Node.js server (port 3000) and Python API server (port 5000) are running.';
+                }
+                showStatus(errorMsg, 'error');
+            }
+        }
+
+        function checkWin(row, col) {
+            const player = board[row][col];
+            if (player === '-') return false;
+
+            // Check row
+            let count = 1;
+            for (let c = col - 1; c >= 0 && board[row][c] === player; c--) count++;
+            for (let c = col + 1; c < boardSize && board[row][c] === player; c++) count++;
+            if (count >= winLength) return true;
+
+            // Check column
+            count = 1;
+            for (let r = row - 1; r >= 0 && board[r][col] === player; r--) count++;
+            for (let r = row + 1; r < boardSize && board[r][col] === player; r++) count++;
+            if (count >= winLength) return true;
+
+            // Check diagonal (top-left to bottom-right)
+            count = 1;
+            for (let r = row - 1, c = col - 1; r >= 0 && c >= 0 && board[r][c] === player; r--, c--) count++;
+            for (let r = row + 1, c = col + 1; r < boardSize && c < boardSize && board[r][c] === player; r++, c++) count++;
+            if (count >= winLength) return true;
+
+            // Check diagonal (top-right to bottom-left)
+            count = 1;
+            for (let r = row - 1, c = col + 1; r >= 0 && c < boardSize && board[r][c] === player; r--, c++) count++;
+            for (let r = row + 1, c = col - 1; r < boardSize && c >= 0 && board[r][c] === player; r++, c--) count++;
+            if (count >= winLength) return true;
+
+            return false;
+        }
+
+        function checkDraw() {
+            return board.every(row => row.every(cell => cell !== '-'));
+        }
+
+        function showStatus(message, type = 'info') {
+            const statusElement = document.getElementById('status');
+            statusElement.textContent = message;
+            statusElement.className = `status ${type}`;
+            statusElement.style.display = 'block';
+        }
+
+        function newGame() {
+            initBoard();
+        }
+
+        function resetBoard() {
+            initBoard();
+        }
+
+        // Check API connection on page load
+        async function checkAPIConnection() {
+            try {
+                const response = await fetch('/api/status');
+                const data = await response.json();
+                if (data.status === 'ok' && data.apiServer.reachable) {
+                    console.log('✓ API server is connected');
+                } else {
+                    showStatus('⚠ Warning: API server may not be reachable. Check console for details.', 'warning');
+                    console.warn('API server status:', data);
+                }
+            } catch (error) {
+                showStatus('⚠ Warning: Cannot check API server status. Make sure Python API server is running on port 5000.', 'warning');
+                console.error('Error checking API status:', error);
+            }
+        }
+
+        // Initialize on page load
+        initBoard();
+        checkAPIConnection();
+    </script>
+</body>
+</html>
+

@@ -18,6 +18,8 @@ docker run -it --rm \
     -p 8888:8888 \
     -p 9000:9000 \
     -p 8123:8123 \
+    -p 3000:3000 \
+    -p 5000:5000 \
     -v "$CURRENT_DIR:/app" \
     -v $CLICKHOUSE_DATA_VOLUME:/var/lib/clickhouse \
     -v $CLICKHOUSE_LOGS_VOLUME:/var/log/clickhouse-server \
