@@ -156,6 +156,21 @@ def build_where_clause(board: list) -> str:
     
     return " AND ".join(conditions) if conditions else "1=1"
 
+def apply_transformation(board: list, transform_func) -> list:
+    n = N
+    new_board = [0] * (n * n)
+    
+    for idx in range(n * n):
+        r = idx // n
+        c = idx % n
+        
+        # Apply transformation
+        new_r, new_c = transform_func(r, c)
+        new_idx = new_r * n + new_c
+        
+        new_board[new_idx] = board[idx]
+    
+    return new_board
 
 def query_odd_table(board: list) -> int:
     """
@@ -176,7 +191,8 @@ def query_odd_table(board: list) -> int:
     
     # Đếm trực tiếp từng bảng và cộng lại
     total_count = 0
-    for level in range(9, 26, 2):  # 9, 11, 13, ..., 25
+    for level in range(9, 26, 2): 
+    # for level in range(9, min(26, max(9,total_count+4)), 2):  # 9, 11, 13, ..., 25
         if level < move_count:
             continue
         
@@ -208,7 +224,8 @@ def query_even_table(board: list) -> int:
     
     # Đếm trực tiếp từng bảng và cộng lại
     total_count = 0
-    for level in range(10, 25, 2):  # 10, 12, 14, ..., 24
+    # for level in range(10, 25, 2):  # 10, 12, 14, ..., 24
+    for level in range(10, min(25, max(10,total_count+4)), 2):
         if level < move_count:
             continue
         

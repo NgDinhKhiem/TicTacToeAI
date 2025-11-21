@@ -7,6 +7,7 @@ import math
 import json
 import requests
 from typing import List, Tuple, Optional, Dict, Callable
+import ttt_100;
 
 # Import board utilities module
 from board_utils import (
@@ -104,6 +105,7 @@ def execute_query(sql: str) -> int:
         return 0
 
 set_execute_query(execute_query)
+ttt_100.set_execute_query(execute_query)
 
 
 #==========================================AI Logic==========================================
@@ -200,6 +202,15 @@ def get_move():
         board_size = int(request.args.get('boardSize') or request.args.get('size') or '5')
         win_length = int(request.args.get('winLength') or request.args.get('win') or '5')
         next_move = (request.args.get('nextMove') or request.args.get('player') or 'X').upper()
+        last_move_row_str = request.args.get('last_move_row')
+        last_move_col_str = request.args.get('last_move_col')
+        
+        # Convert to integers if provided, otherwise None
+        last_move_row = int(last_move_row_str) if last_move_row_str is not None else None
+        last_move_col = int(last_move_col_str) if last_move_col_str is not None else None
+        
+        print(f"Row: {last_move_row}, Col: {last_move_col}")
+
         matrix = request.args.get('matrix') or request.args.get('board')
 
         if board_size < 3 or board_size > 100:
@@ -219,12 +230,105 @@ def get_move():
 
         temperature = float(request.args.get('temperature', '0.1'))
 
-        # Validate board size (current implementation only supports 5x5)
-        if board_size != 5:
-            return jsonify({'error': 'Board size must be 5 for current implementation'}), 400
-
         if not clickhouse_client:
             return jsonify({'error': 'Database connection not available'}), 503
+
+        # Validate board size (current implementation only supports 5x5)
+        if board_size > 5:
+            curr_board_int_2d: list[list[int]] = []
+            for row in board:
+                row_int = []
+                for cell in row:
+                    if cell == '-' or cell == '':
+                        row_int.append(0)
+                    elif cell.upper() == 'X':
+                        row_int.append(1)
+                    elif cell.upper() == 'O':
+                        row_int.append(2)
+                    else:
+                        row_int.append(0)
+                curr_board_int_2d.append(row_int)
+
+            # Handle None values for last_move_row and last_move_col
+            # If not provided, find the last move from the board state
+            if last_move_row is None or last_move_col is None:
+                # Find any non-empty cell on the board to use as reference
+                found_move = False
+                for r in range(board_size):
+                    for c in range(board_size):
+                        if curr_board_int_2d[r][c] != 0:
+                            if last_move_row is None:
+                                last_move_row = r
+                            if last_move_col is None:
+                                last_move_col = c
+                            found_move = True
+                            break
+                    if found_move:
+                        break
+                
+                # If board is empty, use center as default
+                if not found_move:
+                    if last_move_row is None:
+                        last_move_row = board_size // 2
+                    if last_move_col is None:
+                        last_move_col = board_size // 2
+                    print(f"No moves found on board, using center: row={last_move_row}, col={last_move_col}")
+                else:
+                    print(f"Found last move from board state: row={last_move_row}, col={last_move_col}")
+            
+            # Validate last_move coordinates are within bounds
+            if last_move_row < 0 or last_move_row >= board_size:
+                print(f"Warning: last_move_row {last_move_row} out of bounds, clamping to valid range")
+                last_move_row = max(0, min(board_size - 1, last_move_row))
+            if last_move_col < 0 or last_move_col >= board_size:
+                print(f"Warning: last_move_col {last_move_col} out of bounds, clamping to valid range")
+                last_move_col = max(0, min(board_size - 1, last_move_col))
+            
+            # Convert player string to int (1 for X, 2 for O)
+            player_int = 1 if next_move == 'X' else 2
+            
+            print(f"Calling best_steps_unlimited with player={player_int}, last_move_col={last_move_col}, last_move_row={last_move_row}")
+            try:
+                (r, c) = ttt_100.best_steps_unlimited(curr_board_int_2d, player_int, last_move_col, last_move_row)
+                
+                # Handle case where function returns -1 (no move found)
+                if r == -1 or c == -1:
+                    print("best_steps_unlimited returned -1, finding first empty cell as fallback")
+                    # Find first empty cell as fallback
+                    for r_fallback in range(board_size):
+                        for c_fallback in range(board_size):
+                            if curr_board_int_2d[r_fallback][c_fallback] == 0:
+                                return jsonify({
+                                    'row': r_fallback,
+                                    'col': c_fallback,
+                                })
+                    # If board is full, return center
+                    return jsonify({
+                        'row': board_size // 2,
+                        'col': board_size // 2,
+                    })
+                
+                return jsonify({
+                    'row': r,
+                    'col': c,
+                })
+            except Exception as e:
+                import traceback
+                print(f"Error in best_steps_unlimited: {e}")
+                traceback.print_exc()
+                # Fallback: find first empty cell
+                for r_fallback in range(board_size):
+                    for c_fallback in range(board_size):
+                        if curr_board_int_2d[r_fallback][c_fallback] == 0:
+                            return jsonify({
+                                'row': r_fallback,
+                                'col': c_fallback,
+                            })
+                # If board is full, return center
+                return jsonify({
+                    'row': board_size // 2,
+                    'col': board_size // 2,
+                })
 
         # Convert 2D board (List[List[str]]) to 1D list of ints
         # '-' -> 0, 'X' -> 1, 'O' -> 2

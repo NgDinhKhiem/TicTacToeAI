@@ -66,6 +66,13 @@ app.get('/api/move', async (req, res) => {
         console.log(`[${new Date().toISOString()}] Proxying request to: ${apiUrl}`);
         console.log(`  Query params:`, req.query);
         
+        // Log last move parameters specifically
+        if (req.query.last_move_row !== undefined || req.query.last_move_col !== undefined) {
+            console.log(`  Last move params: row=${req.query.last_move_row}, col=${req.query.last_move_col}`);
+        } else {
+            console.log(`  No last move parameters provided`);
+        }
+        
         const response = await makeRequest(apiUrl);
         
         console.log(`  Response status: ${response.status}`);

@@ -283,6 +283,8 @@
         let gameEnded = false;
         let aiPlayer = 'O';
         let firstPlayer = 'X';
+        let lastMoveRow = null;
+        let lastMoveCol = null;
 
         function initBoard() {
             boardSize = parseInt(document.getElementById('boardSize').value) || 3;
@@ -299,6 +301,8 @@
             }
 
             board = Array(boardSize).fill(null).map(() => Array(boardSize).fill('-'));
+            lastMoveRow = null;
+            lastMoveCol = null;
             renderBoard();
 
             if (firstPlayer === aiPlayer) {
@@ -351,6 +355,9 @@
             }
 
             board[row][col] = currentPlayer;
+            lastMoveRow = row;
+            lastMoveCol = col;
+            console.log(`Player ${currentPlayer} made move at row=${lastMoveRow}, col=${lastMoveCol}`);
             renderBoard();
 
             if (checkWin(row, col)) {
@@ -383,8 +390,16 @@
             try {
                 const matrix = JSON.stringify(board);
                 console.log('Sending board to API:', matrix);
-                const url = `${API_BASE_URL}/api/move?boardSize=${boardSize}&winLength=${winLength}&nextMove=${aiPlayer}&matrix=${encodeURIComponent(matrix)}`;
-                console.log('API URL:', url);
+                console.log(`Last move tracked: row=${lastMoveRow}, col=${lastMoveCol}`);
+                
+                let url = `${API_BASE_URL}/api/move?boardSize=${boardSize}&winLength=${winLength}&nextMove=${aiPlayer}&matrix=${encodeURIComponent(matrix)}`;
+                if (lastMoveRow !== null && lastMoveCol !== null) {
+                    url += `&last_move_row=${lastMoveRow}&last_move_col=${lastMoveCol}`;
+                    console.log(`Including last move parameters: last_move_row=${lastMoveRow}, last_move_col=${lastMoveCol}`);
+                } else {
+                    console.log('No last move available (first move or reset)');
+                }
+                console.log('Full API URL:', url);
                 
                 const response = await fetch(url);
                 const data = await response.json();
@@ -397,6 +412,9 @@
                     
                     if (board[row][col] === '-') {
                         board[row][col] = aiPlayer;
+                        lastMoveRow = row;
+                        lastMoveCol = col;
+                        console.log(`AI (${aiPlayer}) made move at row=${lastMoveRow}, col=${lastMoveCol}`);
                         console.log('Board updated with AI move:', board);
                         renderBoard();
 
