@@ -33,7 +33,7 @@ except Exception:
     CLICKHOUSE_PASSWORD = os.getenv('CLICKHOUSE_PASSWORD', 'Helloworld')
     CLICKHOUSE_DATABASE = os.getenv('CLICKHOUSE_DATABASE', 'tictactoe')
     API_HOST = os.getenv('API_HOST', '0.0.0.0')
-    API_PORT = int(os.getenv('API_PORT', 5000))
+    API_PORT = int(os.getenv('API_PORT', 5050))
     API_DEBUG = os.getenv('API_DEBUG', 'True').lower() == 'true'
 
 # HTTP endpoint for ClickHouse (default port 8123)
@@ -103,7 +103,6 @@ def execute_query(sql: str) -> int:
         print(f"❌ Database error: {e}")
         return 0
 
-# Set execute_query function in board_utils module
 set_execute_query(execute_query)
 
 

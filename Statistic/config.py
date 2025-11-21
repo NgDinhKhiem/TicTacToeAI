@@ -11,6 +11,6 @@ CLICKHOUSE_DATABASE = 'tictactoe'
 
 # API Server settings
 API_HOST = '0.0.0.0'
-API_PORT = 5000
+API_PORT = 5050
 API_DEBUG = True
 

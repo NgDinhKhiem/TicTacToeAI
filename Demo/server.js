@@ -3,8 +3,8 @@ const cors = require('cors');
 const http = require('http');
 const { URL } = require('url');
 const app = express();
-const PORT = process.env.PORT || 3000;
-const API_SERVER_URL = process.env.API_SERVER_URL || 'http://localhost:5000';
+const PORT = process.env.PORT || 3030;
+const API_SERVER_URL = process.env.API_SERVER_URL || 'http://localhost:5050';
 
 app.use(cors());
 app.use(express.json());
@@ -147,7 +147,7 @@ async function testAPIConnection() {
     } catch (error) {
         console.warn(`⚠ Warning: Cannot reach API server at ${API_SERVER_URL}`);
         console.warn(`  Error: ${error.message}`);
-        console.warn(`  Make sure the Python API server is running on port 5000`);
+        console.warn(`  Make sure the Python API server is running on port 5050`);
     }
 }
 

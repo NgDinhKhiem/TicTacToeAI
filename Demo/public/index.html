@@ -424,7 +424,7 @@
                 console.error('Error:', error);
                 let errorMsg = 'Error connecting to API: ' + error.message;
                 if (error.message.includes('Failed to fetch') || error.message.includes('NetworkError')) {
-                    errorMsg = 'Cannot connect to server. Make sure both Node.js server (port 3000) and Python API server (port 5000) are running.';
+                    errorMsg = 'Cannot connect to server. Make sure both Node.js server (port 3030) and Python API server (port 5050) are running.';
                 }
                 showStatus(errorMsg, 'error');
             }

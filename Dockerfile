@@ -92,7 +92,7 @@ RUN mkdir -p /var/lib/clickhouse /var/log/clickhouse-server /etc/clickhouse-serv
 VOLUME ["/var/lib/clickhouse", "/var/log/clickhouse-server"]
 
 # Expose JupyterLab, ClickHouse, Node.js server, and Python API server ports
-EXPOSE 8888 9000 8123 3000 5000
+EXPOSE 8888 9000 8123 3030 5050
 
 # Start both ClickHouse and JupyterLab
 CMD ["/usr/local/bin/docker-entrypoint.sh"]
