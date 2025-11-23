@@ -14,13 +14,13 @@ training:
   entropy_coef: 0.01
   value_coef: 0.5
   max_grad_norm: 0.5
-  checkpoint_interval: 100
+  checkpoint_interval: 300
   max_checkpoints: 5
   opponent_pool_size: 3
   eval_random_games: 20
   early_stop_win_rate: 0.9
-  device: auto
-  max_vram_gb: null
+  device: cuda
+  max_vram_gb: 7
   show_self_play_progress: false
   show_eval_progress: true
 checkpoint_dir: checkpoints
