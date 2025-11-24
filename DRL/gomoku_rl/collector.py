@@ -276,14 +276,18 @@ class SelfPlayCollector(Collector):
             if self._augment:
                 transition = augment_transition(transition)
 
-            tensordicts.append(transition.to(self._out_device))
+            # Collect on original device, move to out_device after stacking (more efficient)
+            tensordicts.append(transition)
 
         end = time.perf_counter()
         fps = (steps * self._env.num_envs) / (end - start)
 
         self._env.set_post_step(None)
 
+        # Stack first, then move to out_device in one operation (much faster)
         tensordicts = torch.stack(tensordicts, dim=-1)
+        if tensordicts.device != self._out_device:
+            tensordicts = tensordicts.to(self._out_device)
 
         info.update({"fps": fps})
 
@@ -389,12 +393,19 @@ class VersusPlayCollector(Collector):
                 if i != 0:
                     transition_white = augment_transition(transition_white)
 
-            blacks.append(transition_black.to(self._out_device))
+            # Collect on original device, move to out_device after stacking (more efficient)
+            blacks.append(transition_black)
             if i != 0:
-                whites.append(transition_white.to(self._out_device))
+                whites.append(transition_white)
 
+        # Stack first, then move to out_device in one operation (much faster)
         blacks = torch.stack(blacks, dim=-1) if blacks else None
         whites = torch.stack(whites, dim=-1) if whites else None
+        
+        if blacks is not None and blacks.device != self._out_device:
+            blacks = blacks.to(self._out_device)
+        if whites is not None and whites.device != self._out_device:
+            whites = whites.to(self._out_device)
 
         end = time.perf_counter()
         fps = (steps * self._env.num_envs) / (end - start)
@@ -497,9 +508,13 @@ class BlackPlayCollector(Collector):
             if self._augment:
                 transition_black = augment_transition(transition_black)
 
-            blacks.append(transition_black.to(self._out_device))
+            # Collect on original device, move to out_device after stacking (more efficient)
+            blacks.append(transition_black)
 
+        # Stack first, then move to out_device in one operation (much faster)
         blacks = torch.stack(blacks, dim=-1) if blacks else None
+        if blacks is not None and blacks.device != self._out_device:
+            blacks = blacks.to(self._out_device)
 
         end = time.perf_counter()
         fps = (steps * self._env.num_envs) / (end - start)
@@ -605,9 +620,13 @@ class WhitePlayCollector(Collector):
                     transition_white = augment_transition(transition_white)
 
             if i != 0:
-                whites.append(transition_white.to(self._out_device))
+                # Collect on original device, move to out_device after stacking (more efficient)
+                whites.append(transition_white)
 
+        # Stack first, then move to out_device in one operation (much faster)
         whites = torch.stack(whites, dim=-1) if whites else None
+        if whites is not None and whites.device != self._out_device:
+            whites = whites.to(self._out_device)
 
         end = time.perf_counter()
         fps = (steps * self._env.num_envs) / (end - start)

@@ -42,7 +42,8 @@ def _eval_win_rate(env: GomokuEnv, player_black: _policy_t, player_white: _polic
 
         interested_tensordict.extend(tensordict["stats"][index].unbind(0))
 
-        if episode_done.all().item():
+        # Use .all() without .item() first, then check - avoids blocking sync
+        if episode_done.all():
             break
 
     env.reset()
@@ -53,6 +54,7 @@ def _eval_win_rate(env: GomokuEnv, player_black: _policy_t, player_white: _polic
         player_white.train()
 
     interested_tensordict = torch.stack(interested_tensordict, dim=0)
+    # Compute mean on GPU first, then single .item() call
     return interested_tensordict["black_win"].float().mean().item()
 
 

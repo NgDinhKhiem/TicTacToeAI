@@ -1,11 +1,10 @@
 from omegaconf import DictConfig
-from torch.cuda import _device_t
 from torchrl.data.tensor_specs import DiscreteTensorSpec, TensorSpec
 from .base import Policy
 
 from .common import make_dqn_actor, get_optimizer, make_egreedy_actor
 
-from typing import Callable, Dict, List, Any
+from typing import Callable, Dict, List, Any, Union
 from tensordict import TensorDictBase, TensorDict
 import torch
 import torch.nn as nn
@@ -14,7 +13,6 @@ from tensordict.nn import TensorDictModule
 from torchrl.objectives import DQNLoss, SoftUpdate
 
 from torchrl.data import TensorSpec, DiscreteTensorSpec
-from torch.cuda import _device_t
 
 
 from torchrl.data.replay_buffers.samplers import RandomSampler, Sampler
@@ -27,7 +25,7 @@ def get_replay_buffer(
     buffer_size: int,
     batch_size: int,
     sampler: Sampler | None = None,
-    device: _device_t = None,
+    device: Union[str, torch.device, None] = None,
 ):
     storage = LazyTensorStorage(max_size=buffer_size, device=device)
     buffer = TensorDictReplayBuffer(
@@ -42,11 +40,11 @@ class DQN(Policy):
         cfg: DictConfig,
         action_spec: DiscreteTensorSpec,
         observation_spec: TensorSpec,
-        device: _device_t = "cuda",
+        device: Union[str, torch.device] = "cuda",
     ) -> None:
         super().__init__(cfg, action_spec, observation_spec, device)
         self.cfg: DictConfig = cfg
-        self.device: _device_t = device
+        self.device: Union[str, torch.device] = device
 
         self.actor = make_dqn_actor(cfg, action_spec, device)
         fake_input = observation_spec.zero()

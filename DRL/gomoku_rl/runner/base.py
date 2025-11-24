@@ -21,8 +21,10 @@ class Runner(abc.ABC):
             board_size=cfg.board_size,
             device=cfg.device,
         )
+        # Use configurable eval_num_envs, default to 512 for backward compatibility
+        eval_num_envs = cfg.get("eval_num_envs", 512)
         self.eval_env = GomokuEnv(
-            num_envs=512,
+            num_envs=eval_num_envs,
             board_size=cfg.board_size,
             device=cfg.device,
         )
@@ -161,8 +163,10 @@ class SPRunner(abc.ABC):
             board_size=cfg.board_size,
             device=cfg.device,
         )
+        # Use configurable eval_num_envs, default to 512 for backward compatibility
+        eval_num_envs = cfg.get("eval_num_envs", 512)
         self.eval_env = GomokuEnv(
-            num_envs=512,
+            num_envs=eval_num_envs,
             board_size=cfg.board_size,
             device=cfg.device,
         )

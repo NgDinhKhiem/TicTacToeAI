@@ -2,7 +2,6 @@ from typing import Callable, Dict, List, Any, Union, Iterable
 from tensordict import TensorDict
 import torch
 from torchrl.data import TensorSpec, DiscreteTensorSpec
-from torch.cuda import _device_t
 from omegaconf import DictConfig, OmegaConf
 import logging
 from torchrl.objectives import ClipPPOLoss
@@ -26,7 +25,7 @@ class PPO(Policy):
         cfg: DictConfig,
         action_spec: DiscreteTensorSpec,
         observation_spec: TensorSpec,
-        device: _device_t = "cuda",
+        device: Union[str, torch.device] = "cuda",
     ) -> None:
         super().__init__(cfg, action_spec, observation_spec, device)
         self.cfg: DictConfig = cfg
@@ -71,11 +70,15 @@ class PPO(Policy):
             normalize_advantage=self.cfg.get("normalize_advantage", True),
             loss_critic_type="smooth_l1",
         )
+        # Set the correct tensor key for log probability
+        self.loss_module.set_keys(sample_log_prob="action_log_prob")
 
         self.optim = get_optimizer(self.cfg.optimizer, self.loss_module.parameters())
 
     def __call__(self, tensordict: TensorDict):
-        tensordict=tensordict.to(self.device)
+        # Only move to device if not already there
+        if tensordict.device != self.device:
+            tensordict = tensordict.to(self.device)
         actor_input = tensordict.select("observation", "action_mask", strict=False)
         actor_output: TensorDict = self.actor(actor_input)
         actor_output = actor_output.exclude("probs")
@@ -90,11 +93,16 @@ class PPO(Policy):
         return tensordict
 
     def learn(self, data: TensorDict):
-        # to do: compute the gae for each batch
-        value = data["state_value"].to(self.device)
-        next_value = data["next", "state_value"].to(self.device)
-        done = data["next", "done"].unsqueeze(-1).to(self.device)
-        reward = data["next", "reward"].to(self.device)
+        # Move entire data tensor to device once (if not already there)
+        if data.device != self.device:
+            data = data.to(self.device)
+        
+        # Extract tensors (already on device now)
+        value = data["state_value"]
+        next_value = data["next", "state_value"]
+        done = data["next", "done"].unsqueeze(-1)
+        reward = data["next", "reward"]
+        
         with torch.no_grad():
             adv, value_target = vec_generalized_advantage_estimate(
                 self.gae_gamma,
@@ -120,7 +128,7 @@ class PPO(Policy):
         if invalid is not None:
             data = data[~invalid]
 
-        data=data.reshape(-1)
+        data = data.reshape(-1)
 
         self.train()
         loss_objectives = []
@@ -132,36 +140,45 @@ class PPO(Policy):
             for minibatch in make_dataset_naive(
                 data, batch_size=self.batch_size
             ):
-                minibatch: TensorDict = minibatch.to(self.device)
+                # minibatch is already on device (it's a view/slice of data)
                 loss_vals = self.loss_module(minibatch)
                 loss_value = (
                     loss_vals["loss_objective"]
                     + loss_vals["loss_critic"]
                     + loss_vals["loss_entropy"]
                 )
-                loss_objectives.append(loss_vals["loss_objective"].clone().detach())
-                loss_critics.append(loss_vals["loss_critic"].clone().detach())
-                loss_entropies.append(loss_vals["loss_entropy"].clone().detach())
-                losses.append(loss_value.clone().detach())
+                # Store values without unnecessary cloning during training
+                loss_objectives.append(loss_vals["loss_objective"].detach())
+                loss_critics.append(loss_vals["loss_critic"].detach())
+                loss_entropies.append(loss_vals["loss_entropy"].detach())
+                losses.append(loss_value.detach())
                 # Optimization: backward, grad clipping and optim step
                 loss_value.backward()
 
                 grad_norm = torch.nn.utils.clip_grad_norm_(
                     self.loss_module.parameters(), self.max_grad_norm
                 )
-                grad_norms.append(grad_norm.clone().detach())
+                grad_norms.append(grad_norm.detach())
                 self.optim.step()
                 self.optim.zero_grad()
 
         self.eval()
+        # Batch all .item() calls together to minimize CPU-GPU synchronization overhead
+        # Stack tensors first, then compute mean, then item() - more efficient
+        grad_norm_mean = torch.stack(grad_norms).mean()
+        loss_mean = torch.stack(losses).mean()
+        loss_obj_mean = torch.stack(loss_objectives).mean()
+        loss_crit_mean = torch.stack(loss_critics).mean()
+        loss_ent_mean = torch.stack(loss_entropies).mean()
+        
         return {
             "advantage_meam": loc.item(),
             "advantage_std": scale.item(),
-            "grad_norm": torch.stack(grad_norms).mean().item(),
-            "loss": torch.stack(losses).mean().item(),
-            "loss_objective": torch.stack(loss_objectives).mean().item(),
-            "loss_critic": torch.stack(loss_critics).mean().item(),
-            "loss_entropy": torch.stack(loss_entropies).mean().item(),
+            "grad_norm": grad_norm_mean.item(),
+            "loss": loss_mean.item(),
+            "loss_objective": loss_obj_mean.item(),
+            "loss_critic": loss_crit_mean.item(),
+            "loss_entropy": loss_ent_mean.item(),
         }
 
     def state_dict(self) -> Dict:
@@ -183,6 +200,8 @@ class PPO(Policy):
             normalize_advantage=self.cfg.get("normalize_advantage", True),
             loss_critic_type="smooth_l1",
         )
+        # Set the correct tensor key for log probability
+        self.loss_module.set_keys(sample_log_prob="action_log_prob")
 
         self.optim = get_optimizer(self.cfg.optimizer, self.loss_module.parameters())
 

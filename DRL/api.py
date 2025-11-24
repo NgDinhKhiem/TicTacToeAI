@@ -210,22 +210,12 @@ def load_config():
     global _config_cache
     if _config_cache is None:
         config_path = os.path.join(CONFIG_PATH, "demo.yaml")
-        # Load with struct=False to allow adding new keys
         _config_cache = OmegaConf.load(config_path)
-        OmegaConf.set_struct(_config_cache, False)
-        logging.info(f"Loaded base config from {config_path}")
         
         # Handle Hydra defaults - merge referenced configs
-        # We need to process defaults BEFORE any interpolations are resolved
-        defaults_list = None
         if "defaults" in _config_cache:
-            # Get defaults without triggering interpolation
-            defaults_list = OmegaConf.to_container(_config_cache.defaults, resolve=False)
-            # Remove from config to avoid issues
-            del _config_cache["defaults"]
-        
-        if defaults_list:
-            for default_item in defaults_list:
+            defaults = _config_cache.pop("defaults")
+            for default_item in defaults:
                 # Skip _self_ which is a Hydra special value
                 if default_item == "_self_":
                     continue
@@ -241,15 +231,15 @@ def load_config():
                         if os.path.exists(ref_config_path):
                             ref_config = OmegaConf.load(ref_config_path)
                             # Merge into main config under the group name
+                            # Use OmegaConf.merge to properly merge the configs
                             if group not in _config_cache:
                                 _config_cache[group] = ref_config
                             else:
                                 _config_cache[group] = OmegaConf.merge(_config_cache[group], ref_config)
-                            logging.info(f"Loaded config from {ref_config_path}")
                         else:
                             logging.warning(f"Config file not found: {ref_config_path}")
                 elif isinstance(default_item, dict):
-                    # Handle dict format (this is the typical format from Hydra)
+                    # Handle dict format if needed
                     for group, name in default_item.items():
                         ref_config_path = os.path.join(CONFIG_PATH, group, f"{name}.yaml")
                         if os.path.exists(ref_config_path):
@@ -258,29 +248,16 @@ def load_config():
                                 _config_cache[group] = ref_config
                             else:
                                 _config_cache[group] = OmegaConf.merge(_config_cache[group], ref_config)
-                            logging.info(f"Loaded config from {ref_config_path}")
                         else:
                             logging.warning(f"Config file not found: {ref_config_path}")
         
-        # Ensure algo config is properly loaded
-        if "algo" not in _config_cache or not _config_cache.algo:
-            # If algo doesn't exist at all, load it directly from ppo.yaml
-            logging.warning("algo config not found, loading default ppo.yaml")
-            ppo_config_path = os.path.join(CONFIG_PATH, "algo", "ppo.yaml")
-            if os.path.exists(ppo_config_path):
-                _config_cache.algo = OmegaConf.load(ppo_config_path)
-                logging.info(f"Loaded algo config from {ppo_config_path}")
-            else:
-                # Fallback to minimal config
-                _config_cache.algo = OmegaConf.create({"name": "ppo"})
-                logging.warning("ppo.yaml not found, using minimal algo config")
-        elif "name" not in _config_cache.algo:
+        # Ensure algo.name exists before resolving (needed for checkpoint path interpolation)
+        if "algo" in _config_cache and "name" not in _config_cache.algo:
             # If algo exists but name is missing, set a default
-            logging.warning("algo.name not found, setting to 'ppo'")
             _config_cache.algo.name = "ppo"
-        
-        # Log what we have in algo config for debugging
-        logging.info(f"Algo config keys: {list(_config_cache.algo.keys()) if 'algo' in _config_cache else 'None'}")
+        elif "algo" not in _config_cache:
+            # If algo doesn't exist at all, create it with default
+            _config_cache.algo = OmegaConf.create({"name": "ppo"})
         
         # Register resolver before resolving
         OmegaConf.register_new_resolver("eval", eval)
@@ -364,41 +341,22 @@ def get_model(board_size: int, checkpoint_path: str = None):
                 logging.warning(f"Failed to load checkpoint {checkpoint_path}: {e}. Using uniform policy.")
                 model = uniform_policy
         else:
-            # Construct checkpoint path with the updated board_size
-            # Don't rely on pre-resolved config values since board_size was just updated
-            algo_name = cfg.get("algo", {}).get("name", "ppo")
-            default_checkpoint = f"pretrained_models/{board_size}_{board_size}/{algo_name}/0.pt"
+            # Try default checkpoint path
+            default_checkpoint = cfg.get("checkpoint", None)
+            # If checkpoint path has unresolved interpolations, try to resolve them manually
+            if default_checkpoint and isinstance(default_checkpoint, str) and "${" in default_checkpoint:
+                try:
+                    # Try to resolve the checkpoint path
+                    temp_cfg = OmegaConf.create({"checkpoint": default_checkpoint})
+                    OmegaConf.resolve(temp_cfg)
+                    default_checkpoint = temp_cfg.checkpoint
+                except Exception:
+                    # If resolution fails, construct a default path
+                    algo_name = cfg.get("algo", {}).get("name", "ppo")
+                    default_checkpoint = f"pretrained_models/{board_size}_{board_size}/{algo_name}/0.pt"
+                    logging.warning(f"Could not resolve checkpoint path, using: {default_checkpoint}")
             
-            # Make checkpoint path absolute relative to api.py location
-            if not os.path.isabs(default_checkpoint):
-                default_checkpoint = os.path.abspath(
-                    os.path.join(os.path.dirname(__file__), default_checkpoint)
-                )
-            
-            # Try to find the checkpoint file
-            checkpoint_found = False
-            if os.path.exists(default_checkpoint):
-                checkpoint_found = True
-            else:
-                # Try alternative checkpoint names
-                checkpoint_dir = os.path.dirname(default_checkpoint)
-                if os.path.isdir(checkpoint_dir):
-                    # Look for any .pt files in the directory
-                    import glob
-                    pt_files = glob.glob(os.path.join(checkpoint_dir, "*.pt"))
-                    if pt_files:
-                        # Prefer black_*.pt or white_*.pt, or just take the first one
-                        black_files = [f for f in pt_files if "black" in os.path.basename(f).lower()]
-                        if black_files:
-                            default_checkpoint = black_files[0]
-                            checkpoint_found = True
-                            logging.info(f"Using alternative checkpoint: {default_checkpoint}")
-                        else:
-                            default_checkpoint = pt_files[0]
-                            checkpoint_found = True
-                            logging.info(f"Using alternative checkpoint: {default_checkpoint}")
-            
-            if checkpoint_found:
+            if default_checkpoint and os.path.exists(default_checkpoint):
                 model = make_model(cfg)
                 try:
                     model.load_state_dict(torch.load(default_checkpoint, map_location=cfg.device))
@@ -408,7 +366,7 @@ def get_model(board_size: int, checkpoint_path: str = None):
                     logging.warning(f"Failed to load default checkpoint: {e}. Using uniform policy.")
                     model = uniform_policy
             else:
-                logging.info(f"No checkpoint found at {default_checkpoint}, using uniform policy")
+                logging.info("No checkpoint found, using uniform policy")
                 model = uniform_policy
         
         _model_cache[cache_key] = model

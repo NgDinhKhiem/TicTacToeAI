@@ -18,22 +18,27 @@ class IndependentRLRunner(Runner):
         info = add_prefix(info, "versus_play/")
         info['fps'] = info['versus_play/fps']
         del info['versus_play/fps']
+        
+        # Convert to tensordict once and reuse
+        data_black_td = data_black.to_tensordict()
+        data_white_td = data_white.to_tensordict()
+        
         info.update(
             add_prefix(
-                self.policy_black.learn(
-                    data_black.to_tensordict()), "policy_black/"
+                self.policy_black.learn(data_black_td), "policy_black/"
             )
         )
-        del data_black
+        del data_black, data_black_td
+        
         info.update(
             add_prefix(
-                self.policy_white.learn(
-                    data_white.to_tensordict()), "policy_white/"
+                self.policy_white.learn(data_white_td), "policy_white/"
             )
         )
-        del data_white
+        del data_white, data_white_td
 
-        if epoch % 50 == 0 and epoch != 0:
+        # Clear CUDA cache more frequently to prevent memory fragmentation
+        if epoch % 10 == 0 and epoch != 0:
             torch.cuda.empty_cache()
 
         return info
@@ -42,7 +47,9 @@ class IndependentRLRunner(Runner):
         pass
 
     def _log(self, info: dict[str, Any], epoch: int):
-        if epoch % 5 == 0:
+        # Use configurable eval_interval, default to 5 for backward compatibility
+        eval_interval = self.cfg.get("eval_interval", 5)
+        if epoch % eval_interval == 0:
             info.update(
                 {
                     "eval/black_vs_white": eval_win_rate(
@@ -88,7 +95,8 @@ class IndependentRLSPRunner(SPRunner):
             data.to_tensordict()), "policy/"))
         del data
 
-        if epoch % 50 == 0 and epoch != 0:
+        # Clear CUDA cache more frequently to prevent memory fragmentation
+        if epoch % 10 == 0 and epoch != 0:
             torch.cuda.empty_cache()
 
         return info
@@ -97,7 +105,9 @@ class IndependentRLSPRunner(SPRunner):
         pass
 
     def _log(self, info: dict[str, Any], epoch: int):
-        if epoch % 5 == 0:
+        # Use configurable eval_interval, default to 5 for backward compatibility
+        eval_interval = self.cfg.get("eval_interval", 5)
+        if epoch % eval_interval == 0:
             info.update(
                 {
                     "eval/player_vs_player": eval_win_rate(

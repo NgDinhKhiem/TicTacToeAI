@@ -3,7 +3,8 @@ from .policy import _policy_t, uniform_policy
 from .eval import eval_win_rate
 from tensordict.nn import TensorDictModule, set_interaction_type, InteractionType
 from tensordict import TensorDict
-from torch.cuda import _device_t
+from typing import Union
+import torch
 from gomoku_rl.policy import Policy
 import copy
 import contextlib
@@ -77,7 +78,7 @@ class Population:
         self,
         dir: str,
         initial_policy: _policy_t | list[_policy_t] = uniform_policy,
-        device: _device_t = "cuda",
+        device: Union[str, torch.device] = "cuda",
     ):
         self.dir = dir
         os.makedirs(self.dir, exist_ok=True)

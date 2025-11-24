@@ -1,15 +1,17 @@
 seed: 0
-num_envs: 512  # Keep same for memory constraints
+num_envs: 512
 board_size: 10
 device: cuda
-out_device: cpu
+out_device: cuda  # Changed from cpu to cuda to avoid GPU->CPU->GPU transfers
 run_dir:
 
-augment: true  # Enable augmentation to increase data diversity
+augment: false
 
 epochs: 1000
-steps: 256  # Increased from 128 for more samples per epoch (131,072 total)
-save_interval: 50  # Reduced from 100 to monitor progress more frequently
+steps: 128
+save_interval: 100
+eval_interval: 20  # Evaluate every 20 epochs (set to 1000 to disable during development)
+eval_num_envs: 128  # Use fewer environments for faster evaluation (default: 512)
 
 
 black_checkpoint: pretrained_models/${board_size}_${board_size}/${algo.name}/0.pt
