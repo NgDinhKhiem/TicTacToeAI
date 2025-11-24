@@ -7,7 +7,7 @@ run_dir:
 
 augment: false
 
-epochs: 1000
+epochs: 2000
 steps: 128
 save_interval: 100
 eval_interval: 20  # Evaluate every 20 epochs (set to 1000 to disable during development)
