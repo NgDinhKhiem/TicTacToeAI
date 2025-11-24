@@ -21,6 +21,6 @@ optimizer:
 
 
 num_channels: 64
-num_residual_blocks: 4
+num_residual_blocks: 5
 
 
