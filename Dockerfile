@@ -68,7 +68,7 @@ WORKDIR /app
 # Copy requirements and install Python packages
 COPY requirements.txt .
 RUN python -m pip install --upgrade pip && \
-    python -m pip install -r requirements.txt
+    python -m pip install --ignore-installed -r requirements.txt
     #export PYTHONPATH=/app/DRL:$PYTHONPATH
     #python -m pip install --upgrade --ignore-installed flask
 
