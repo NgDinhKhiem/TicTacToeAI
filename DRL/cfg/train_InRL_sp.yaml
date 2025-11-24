@@ -13,7 +13,7 @@ save_interval: -1
 
 
 
-# checkpoint: pretrained_models/${board_size}_${board_size}/${algo.name}/0.pt
+checkpoint: pretrained_models/${board_size}_${board_size}/${algo.name}/0.pt
 
 wandb:
   group: ${board_size}_${board_size}_${algo.name}_InRL_sp

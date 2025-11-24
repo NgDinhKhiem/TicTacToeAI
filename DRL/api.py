@@ -215,6 +215,7 @@ def load_config():
         # Handle Hydra defaults - merge referenced configs
         if "defaults" in _config_cache:
             defaults = _config_cache.pop("defaults")
+            logging.info(f"Loading config defaults: {defaults}")
             for default_item in defaults:
                 # Skip _self_ which is a Hydra special value
                 if default_item == "_self_":
@@ -228,36 +229,60 @@ def load_config():
                         name = name.strip()
                         # Load the referenced config
                         ref_config_path = os.path.join(CONFIG_PATH, group, f"{name}.yaml")
+                        logging.info(f"Loading config from: {ref_config_path}")
                         if os.path.exists(ref_config_path):
                             ref_config = OmegaConf.load(ref_config_path)
+                            logging.info(f"Loaded {group} config with keys: {list(ref_config.keys())}")
                             # Merge into main config under the group name
                             # Use OmegaConf.merge to properly merge the configs
                             if group not in _config_cache:
                                 _config_cache[group] = ref_config
                             else:
                                 _config_cache[group] = OmegaConf.merge(_config_cache[group], ref_config)
+                            logging.info(f"Merged {group} config. Final keys: {list(_config_cache[group].keys())}")
                         else:
                             logging.warning(f"Config file not found: {ref_config_path}")
                 elif isinstance(default_item, dict):
                     # Handle dict format if needed
                     for group, name in default_item.items():
                         ref_config_path = os.path.join(CONFIG_PATH, group, f"{name}.yaml")
+                        logging.info(f"Loading config from: {ref_config_path}")
                         if os.path.exists(ref_config_path):
                             ref_config = OmegaConf.load(ref_config_path)
+                            logging.info(f"Loaded {group} config with keys: {list(ref_config.keys())}")
                             if group not in _config_cache:
                                 _config_cache[group] = ref_config
                             else:
                                 _config_cache[group] = OmegaConf.merge(_config_cache[group], ref_config)
+                            logging.info(f"Merged {group} config. Final keys: {list(_config_cache[group].keys())}")
                         else:
                             logging.warning(f"Config file not found: {ref_config_path}")
         
-        # Ensure algo.name exists before resolving (needed for checkpoint path interpolation)
-        if "algo" in _config_cache and "name" not in _config_cache.algo:
+        # Ensure algo config exists and has all required fields
+        if "algo" not in _config_cache:
+            # If algo doesn't exist at all, try to load default PPO config
+            ppo_config_path = os.path.join(CONFIG_PATH, "algo", "ppo.yaml")
+            if os.path.exists(ppo_config_path):
+                logging.info(f"Loading default PPO config from: {ppo_config_path}")
+                _config_cache.algo = OmegaConf.load(ppo_config_path)
+            else:
+                logging.warning(f"PPO config not found at {ppo_config_path}, creating minimal config")
+                _config_cache.algo = OmegaConf.create({"name": "ppo"})
+        elif "name" not in _config_cache.algo:
             # If algo exists but name is missing, set a default
             _config_cache.algo.name = "ppo"
-        elif "algo" not in _config_cache:
-            # If algo doesn't exist at all, create it with default
-            _config_cache.algo = OmegaConf.create({"name": "ppo"})
+        
+        # Verify algo config has required PPO parameters, load defaults if missing
+        if _config_cache.algo.get("name") == "ppo":
+            ppo_config_path = os.path.join(CONFIG_PATH, "algo", "ppo.yaml")
+            if os.path.exists(ppo_config_path):
+                default_ppo_config = OmegaConf.load(ppo_config_path)
+                # Merge missing keys from default PPO config
+                for key in default_ppo_config.keys():
+                    if key not in _config_cache.algo:
+                        logging.info(f"Adding missing PPO parameter: {key} = {default_ppo_config[key]}")
+                        _config_cache.algo[key] = default_ppo_config[key]
+                logging.info(f"Final algo config keys: {list(_config_cache.algo.keys())}")
         
         # Register resolver before resolving
         OmegaConf.register_new_resolver("eval", eval)
@@ -331,41 +356,90 @@ def get_model(board_size: int, checkpoint_path: str = None):
                 cfg.algo = OmegaConf.create()
             cfg.algo.name = "ppo"
         
-        if checkpoint_path and os.path.exists(checkpoint_path):
-            model = make_model(cfg)
-            try:
-                model.load_state_dict(torch.load(checkpoint_path, map_location=cfg.device))
-                model.eval()
-                logging.info(f"Loaded checkpoint from {checkpoint_path}")
-            except Exception as e:
-                logging.warning(f"Failed to load checkpoint {checkpoint_path}: {e}. Using uniform policy.")
-                model = uniform_policy
-        else:
+        model = None
+        
+        if checkpoint_path:
+            logging.info(f"Checkpoint path provided: {checkpoint_path}")
+            logging.info(f"Absolute checkpoint path: {os.path.abspath(checkpoint_path)}")
+            logging.info(f"Checkpoint exists: {os.path.exists(checkpoint_path)}")
+            
+            if os.path.exists(checkpoint_path):
+                model = make_model(cfg)
+                try:
+                    model.load_state_dict(torch.load(checkpoint_path, map_location=cfg.device))
+                    model.eval()
+                    logging.info(f"Successfully loaded checkpoint from {checkpoint_path}")
+                except Exception as e:
+                    logging.warning(f"Failed to load checkpoint {checkpoint_path}: {e}. Using uniform policy.")
+                    import traceback
+                    logging.debug(traceback.format_exc())
+                    model = None  # Fall through to default checkpoint logic
+            else:
+                logging.warning(f"Provided checkpoint path does not exist: {checkpoint_path}")
+                logging.info("Falling back to default checkpoint lookup")
+                model = None  # Fall through to default checkpoint logic
+        
+        if model is None:
             # Try default checkpoint path
             default_checkpoint = cfg.get("checkpoint", None)
+            algo_name = cfg.get("algo", {}).get("name", "ppo")
+            checkpoint_dir = f"pretrained_models/{board_size}_{board_size}/{algo_name}"
+            
+            # Log the directory being checked
+            logging.info(f"Checking checkpoint directory: {checkpoint_dir}")
+            logging.info(f"Working directory: {os.getcwd()}")
+            logging.info(f"Absolute checkpoint dir path: {os.path.abspath(checkpoint_dir)}")
+            
+            # List files in the checkpoint directory if it exists
+            if os.path.exists(checkpoint_dir):
+                try:
+                    files_in_dir = os.listdir(checkpoint_dir)
+                    logging.info(f"Files found in {checkpoint_dir}: {files_in_dir}")
+                    # Filter for .pt files
+                    pt_files = [f for f in files_in_dir if f.endswith('.pt')]
+                    logging.info(f"Checkpoint files (.pt) found: {pt_files}")
+                except Exception as e:
+                    logging.warning(f"Could not list files in {checkpoint_dir}: {e}")
+            else:
+                logging.warning(f"Checkpoint directory does not exist: {checkpoint_dir}")
+            
             # If checkpoint path has unresolved interpolations, try to resolve them manually
             if default_checkpoint and isinstance(default_checkpoint, str) and "${" in default_checkpoint:
+                logging.info(f"Resolving checkpoint path with interpolations: {default_checkpoint}")
                 try:
                     # Try to resolve the checkpoint path
                     temp_cfg = OmegaConf.create({"checkpoint": default_checkpoint})
                     OmegaConf.resolve(temp_cfg)
                     default_checkpoint = temp_cfg.checkpoint
-                except Exception:
+                    logging.info(f"Resolved checkpoint path: {default_checkpoint}")
+                except Exception as e:
                     # If resolution fails, construct a default path
-                    algo_name = cfg.get("algo", {}).get("name", "ppo")
-                    default_checkpoint = f"pretrained_models/{board_size}_{board_size}/{algo_name}/0.pt"
-                    logging.warning(f"Could not resolve checkpoint path, using: {default_checkpoint}")
+                    default_checkpoint = f"{checkpoint_dir}/0.pt"
+                    logging.warning(f"Could not resolve checkpoint path ({e}), using: {default_checkpoint}")
+            elif not default_checkpoint:
+                # No checkpoint specified, try default
+                default_checkpoint = f"{checkpoint_dir}/0.pt"
+                logging.info(f"No checkpoint specified in config, trying default: {default_checkpoint}")
+            
+            logging.info(f"Attempting to load checkpoint from: {default_checkpoint}")
+            logging.info(f"Checkpoint exists: {os.path.exists(default_checkpoint) if default_checkpoint else False}")
             
             if default_checkpoint and os.path.exists(default_checkpoint):
                 model = make_model(cfg)
                 try:
                     model.load_state_dict(torch.load(default_checkpoint, map_location=cfg.device))
                     model.eval()
-                    logging.info(f"Loaded default checkpoint from {default_checkpoint}")
+                    logging.info(f"Successfully loaded default checkpoint from {default_checkpoint}")
                 except Exception as e:
                     logging.warning(f"Failed to load default checkpoint: {e}. Using uniform policy.")
+                    import traceback
+                    logging.debug(traceback.format_exc())
                     model = uniform_policy
             else:
+                if default_checkpoint:
+                    logging.warning(f"Checkpoint file not found: {default_checkpoint}")
+                else:
+                    logging.warning("No checkpoint path specified")
                 logging.info("No checkpoint found, using uniform policy")
                 model = uniform_policy
         

@@ -69,6 +69,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN python -m pip install --upgrade pip && \
     python -m pip install -r requirements.txt
+    #export PYTHONPATH=/app/DRL:$PYTHONPATH
     #python -m pip install --upgrade --ignore-installed flask
 
 # Copy application code (Statistic folder for API server, Demo folder for frontend)

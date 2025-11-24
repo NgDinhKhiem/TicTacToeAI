@@ -1,4 +1,4 @@
-board_size: 15
+board_size: 10
 
 checkpoint: pretrained_models/${board_size}_${board_size}/${algo.name}/0.pt
 device: cpu
