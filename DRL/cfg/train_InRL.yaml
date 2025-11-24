@@ -1,0 +1,26 @@
+seed: 0
+num_envs: 512  # Keep same for memory constraints
+board_size: 10
+device: cuda
+out_device: cpu
+run_dir:
+
+augment: true  # Enable augmentation to increase data diversity
+
+epochs: 1000
+steps: 256  # Increased from 128 for more samples per epoch (131,072 total)
+save_interval: 50  # Reduced from 100 to monitor progress more frequently
+
+
+black_checkpoint: pretrained_models/${board_size}_${board_size}/${algo.name}/0.pt
+white_checkpoint: pretrained_models/${board_size}_${board_size}/${algo.name}/1.pt
+
+wandb:
+  group: ${board_size}_${board_size}_${algo.name}_InRL
+  project: gomoku_rl
+  mode: online # set to 'disabled' when debugging locally
+
+defaults:
+  - _self_
+  - algo: ppo
+  - baseline: ppo

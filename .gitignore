@@ -64,3 +64,6 @@ desktop.ini
 *.log
 Dataset/config.json
 /DRL/checkpoints
+/DRL/wandb
+/DRL/outputs
+/DRL/examples

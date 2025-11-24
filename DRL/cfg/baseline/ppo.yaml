@@ -1,0 +1,26 @@
+name: ppo
+
+# ppo
+ppo_epochs: 4  # Increased from 3 for more updates per batch
+clip_param: 0.2 # 0.2
+entropy_coef: 0.02  # Increased from 0.001 (baseline uses lower entropy than main policy)
+gae_lambda: 0.90  # Reduced from 0.95 to decrease advantage variance
+gamma: 0.97  # Reduced from 0.99 for easier value learning
+max_grad_norm: 0.5
+batch_size: 8192  # Increased from 4096 for more stable updates
+
+normalize_advantage: true
+average_gae: False
+
+share_network: True
+
+optimizer:
+  name: adam
+  kwargs:
+    lr: 3e-4  # Keep baseline's higher learning rate
+
+
+num_channels: 64
+num_residual_blocks: 4
+
+
