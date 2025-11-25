@@ -189,7 +189,7 @@ class PPO(Policy):
 
     def load_state_dict(self, state_dict: Dict):
         self.critic.load_state_dict(state_dict["critic"], strict=False)
-        self.actor.load_state_dict(state_dict["actor"])
+        self.actor.load_state_dict(state_dict["actor"], strict=False)
 
         self.loss_module = ClipPPOLoss(
             actor=self.actor,

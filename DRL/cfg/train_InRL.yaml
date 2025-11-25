@@ -1,8 +1,8 @@
 seed: 0
 num_envs: 512
 board_size: 10
-device: cuda
-out_device: cuda  # Changed from cpu to cuda to avoid GPU->CPU->GPU transfers
+device: cpu
+out_device: cpu  # Changed from cpu to cuda to avoid GPU->CPU->GPU transfers
 run_dir:
 
 augment: false

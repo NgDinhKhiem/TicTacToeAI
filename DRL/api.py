@@ -366,9 +366,19 @@ def get_model(board_size: int, checkpoint_path: str = None):
             if os.path.exists(checkpoint_path):
                 model = make_model(cfg)
                 try:
-                    model.load_state_dict(torch.load(checkpoint_path, map_location=cfg.device))
+                    state_dict = torch.load(checkpoint_path, map_location=cfg.device)
+                    model.load_state_dict(state_dict)
                     model.eval()
                     logging.info(f"Successfully loaded checkpoint from {checkpoint_path}")
+                except RuntimeError as e:
+                    if "Missing key(s)" in str(e) or "Unexpected key(s)" in str(e):
+                        logging.warning(f"Architecture mismatch when loading checkpoint {checkpoint_path}: {e}")
+                        logging.info("Note: Policy load_state_dict uses strict=False, but some keys still couldn't be loaded.")
+                        logging.warning("Using uniform policy as fallback.")
+                        model = None
+                    else:
+                        logging.warning(f"Failed to load checkpoint {checkpoint_path}: {e}. Using uniform policy.")
+                        model = None
                 except Exception as e:
                     logging.warning(f"Failed to load checkpoint {checkpoint_path}: {e}. Using uniform policy.")
                     import traceback
@@ -427,9 +437,19 @@ def get_model(board_size: int, checkpoint_path: str = None):
             if default_checkpoint and os.path.exists(default_checkpoint):
                 model = make_model(cfg)
                 try:
-                    model.load_state_dict(torch.load(default_checkpoint, map_location=cfg.device))
+                    state_dict = torch.load(default_checkpoint, map_location=cfg.device)
+                    model.load_state_dict(state_dict)
                     model.eval()
                     logging.info(f"Successfully loaded default checkpoint from {default_checkpoint}")
+                except RuntimeError as e:
+                    if "Missing key(s)" in str(e) or "Unexpected key(s)" in str(e):
+                        logging.warning(f"Architecture mismatch when loading default checkpoint {default_checkpoint}: {e}")
+                        logging.info("Note: Policy load_state_dict uses strict=False, but some keys still couldn't be loaded.")
+                        logging.warning("Using uniform policy as fallback.")
+                        model = uniform_policy
+                    else:
+                        logging.warning(f"Failed to load default checkpoint: {e}. Using uniform policy.")
+                        model = uniform_policy
                 except Exception as e:
                     logging.warning(f"Failed to load default checkpoint: {e}. Using uniform policy.")
                     import traceback
