@@ -24,8 +24,14 @@ num_channels: 64
 num_residual_blocks: 4
 
 # Strategic evaluation parameters
-use_threat_detection: true
+use_threat_detection: true  # Enable threat detection
+use_threat_detection_during_training: true  # Enable during training (optimized for speed)
 threat_boost_temperature: 1.0  # Temperature for strategic boost (higher = less aggressive boost)
+max_actions_to_check: 30  # Limit actions checked per environment for speed (higher = more thorough but slower, optimized default: 30)
+
+# Debug parameters
+debug_threat_detection: true  # Enable detailed debug logging for threat detection
+debug_step_interval: 100  # Log debug info every N steps (only if debug_threat_detection is true)
 
 # Threat parameters (creating threats)
 double_three_boost: 2.0  # Boost for single open three threats
@@ -37,7 +43,7 @@ block_fork_boost: 4.0  # Boost for blocking opponent's fork (double-three threat
 block_open_four_boost: 6.0  # Boost for blocking opponent's open four (critical defense)
 
 # Positional parameters (board control)
-center_boost: 0.5  # Boost for center positions (higher for positions closer to center)
-corner_boost: 0.3  # Boost for corner positions
+center_boost: 0.2  # Boost for center positions (higher for positions closer to center)
+corner_boost: 0.1 # Boost for corner positions
 edge_boost: 0.2  # Boost for edge positions (but not corners)
 

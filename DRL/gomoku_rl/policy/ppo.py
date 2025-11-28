@@ -19,6 +19,8 @@ from gomoku_rl.utils.module import (
 )
 from gomoku_rl.utils.threat_detection import compute_threat_boost
 
+logger = logging.getLogger(__name__)
+
 
 class PPO(Policy):
     def __init__(
@@ -44,7 +46,9 @@ class PPO(Policy):
         self.max_grad_norm: float = cfg.max_grad_norm
         
         # Strategic evaluation parameters
-        self.use_threat_detection: bool = cfg.get("use_threat_detection", True)
+        # Disable by default during training for speed - enable only for evaluation
+        self.use_threat_detection: bool = cfg.get("use_threat_detection", False)
+        self.use_threat_detection_during_training: bool = cfg.get("use_threat_detection_during_training", False)
         self.threat_boost_temperature: float = cfg.get("threat_boost_temperature", 1.0)
         
         # Threat parameters
@@ -60,6 +64,14 @@ class PPO(Policy):
         self.center_boost: float = cfg.get("center_boost", 0.5)
         self.corner_boost: float = cfg.get("corner_boost", 0.3)
         self.edge_boost: float = cfg.get("edge_boost", 0.2)
+        
+        # Performance optimization
+        self.max_actions_to_check: int = cfg.get("max_actions_to_check", 30)  # Optimized default
+        
+        # Debug settings
+        self.debug_threat_detection: bool = cfg.get("debug_threat_detection", False)
+        self.debug_step_interval: int = cfg.get("debug_step_interval", 100)  # Log every N steps
+        self._step_count = 0
         
         if self.cfg.get("share_network"):
             actor_value_operator = make_ppo_ac(
@@ -96,6 +108,9 @@ class PPO(Policy):
         self.optim = get_optimizer(self.cfg.optimizer, self.loss_module.parameters())
 
     def __call__(self, tensordict: TensorDict):
+        self._step_count += 1
+        should_log = self.debug_threat_detection and (self._step_count % self.debug_step_interval == 0)
+        
         # Only move to device if not already there
         if tensordict.device != self.device:
             tensordict = tensordict.to(self.device)
@@ -105,7 +120,19 @@ class PPO(Policy):
         actor_output: TensorDict = self.actor(actor_input)
         
         # Apply threat detection boost if enabled
-        if self.use_threat_detection and not self.actor.training:
+        # Only run during evaluation unless explicitly enabled for training
+        should_use_threat_detection = (
+            self.use_threat_detection and 
+            (self.use_threat_detection_during_training or not self.actor.training)
+        )
+        
+        if should_log:
+            logger.debug(f"[Step {self._step_count}] Threat detection enabled: {should_use_threat_detection}, "
+                        f"Training mode: {self.actor.training}, "
+                        f"use_threat_detection: {self.use_threat_detection}, "
+                        f"use_threat_detection_during_training: {self.use_threat_detection_during_training}")
+        
+        if should_use_threat_detection:
             # Extract board state from observation
             observation = tensordict["observation"]  # (E, 3, B, B)
             action_mask = tensordict["action_mask"]  # (E, B*B)
@@ -126,6 +153,12 @@ class PPO(Policy):
             # The observation always shows current player as layer 0
             player_piece = 1  # Current player piece
             
+            if should_log:
+                num_valid_actions = action_mask.sum(dim=1).float().mean().item()
+                logger.debug(f"[Step {self._step_count}] Board state - "
+                            f"Num envs: {num_envs}, Board size: {board_size}, "
+                            f"Avg valid actions: {num_valid_actions:.1f}")
+            
             # Compute comprehensive strategic boost
             strategic_boost = compute_threat_boost(
                 board=board,
@@ -141,11 +174,44 @@ class PPO(Policy):
                 center_boost=self.center_boost,
                 corner_boost=self.corner_boost,
                 edge_boost=self.edge_boost,
+                max_actions_to_check=self.max_actions_to_check,
+                debug=should_log,
+                step_count=self._step_count,
             )
+            
+            if should_log:
+                # Analyze boost statistics
+                boost_stats = {
+                    'max': strategic_boost.max().item(),
+                    'mean': strategic_boost[action_mask].mean().item() if action_mask.any() else 0.0,
+                    'non_zero': (strategic_boost > 0).sum().item(),
+                    'total_actions': action_mask.sum().item(),
+                }
+                logger.debug(f"[Step {self._step_count}] Strategic boost stats - "
+                            f"Max: {boost_stats['max']:.2f}, "
+                            f"Mean (valid): {boost_stats['mean']:.4f}, "
+                            f"Non-zero boosts: {boost_stats['non_zero']}/{boost_stats['total_actions']}")
             
             # Modify probabilities by converting to logits, applying boost, and converting back
             if "probs" in actor_output.keys():
                 probs = actor_output["probs"]  # (E, B*B)
+                
+                if should_log:
+                    # Log top actions before boost
+                    top_k = 5
+                    for env_idx in range(min(2, num_envs)):  # Log first 2 environments
+                        env_probs = probs[env_idx]
+                        env_mask = action_mask[env_idx]
+                        valid_probs = env_probs[env_mask]
+                        valid_indices = torch.where(env_mask)[0]
+                        top_probs, top_indices = torch.topk(valid_probs, min(top_k, len(valid_probs)))
+                        top_actions = valid_indices[top_indices]
+                        logger.debug(f"[Step {self._step_count}] Env {env_idx} - Top {len(top_probs)} actions BEFORE boost:")
+                        for i, (action, prob) in enumerate(zip(top_actions, top_probs)):
+                            r, c = action.item() // board_size, action.item() % board_size
+                            boost_val = strategic_boost[env_idx, action.item()].item()
+                            logger.debug(f"  {i+1}. Action ({r},{c}) - Prob: {prob.item():.4f}, Boost: {boost_val:.2f}")
+                
                 # Convert to logits (add small epsilon to avoid log(0))
                 logits = torch.log(probs + 1e-8)
                 # Apply strategic boost (divide by temperature to control strength)
@@ -154,6 +220,23 @@ class PPO(Policy):
                 logits = torch.where(action_mask, logits, torch.tensor(-float('inf'), device=self.device))
                 # Convert back to probabilities
                 probs_boosted = torch.softmax(logits, dim=-1)
+                
+                if should_log:
+                    # Log top actions after boost
+                    for env_idx in range(min(2, num_envs)):  # Log first 2 environments
+                        env_probs = probs_boosted[env_idx]
+                        env_mask = action_mask[env_idx]
+                        valid_probs = env_probs[env_mask]
+                        valid_indices = torch.where(env_mask)[0]
+                        top_probs, top_indices = torch.topk(valid_probs, min(top_k, len(valid_probs)))
+                        top_actions = valid_indices[top_indices]
+                        logger.debug(f"[Step {self._step_count}] Env {env_idx} - Top {len(top_probs)} actions AFTER boost:")
+                        for i, (action, prob) in enumerate(zip(top_actions, top_probs)):
+                            r, c = action.item() // board_size, action.item() % board_size
+                            boost_val = strategic_boost[env_idx, action.item()].item()
+                            prob_before = probs[env_idx, action.item()].item()
+                            logger.debug(f"  {i+1}. Action ({r},{c}) - Prob: {prob_before:.4f} -> {prob.item():.4f}, Boost: {boost_val:.2f}")
+                
                 # Update the actor output
                 actor_output["probs"] = probs_boosted
         
@@ -169,6 +252,12 @@ class PPO(Policy):
         return tensordict
 
     def learn(self, data: TensorDict):
+        should_log = self.debug_threat_detection and (self._step_count % self.debug_step_interval == 0)
+        
+        if should_log:
+            logger.debug(f"[Step {self._step_count}] Learning - Data shape: {data.shape}, "
+                        f"Device: {data.device}, Policy device: {self.device}")
+        
         # Move entire data tensor to device once (if not already there)
         if data.device != self.device:
             data = data.to(self.device)
@@ -202,9 +291,16 @@ class PPO(Policy):
         # filter out invalid white transitions
         invalid = data.get("invalid", None)
         if invalid is not None:
+            num_invalid = invalid.sum().item()
+            if should_log:
+                logger.debug(f"[Step {self._step_count}] Learning - Filtered {num_invalid} invalid transitions")
             data = data[~invalid]
 
         data = data.reshape(-1)
+        
+        if should_log:
+            logger.debug(f"[Step {self._step_count}] Learning - After filtering: {data.shape[0]} transitions, "
+                        f"PPO epochs: {self.ppo_epoch}, Batch size: {self.batch_size}")
 
         self.train()
         loss_objectives = []
@@ -212,7 +308,9 @@ class PPO(Policy):
         loss_entropies = []
         losses = []
         grad_norms = []
-        for _ in range(self.ppo_epoch):
+        for epoch in range(self.ppo_epoch):
+            if should_log and epoch == 0:
+                logger.debug(f"[Step {self._step_count}] Learning - Starting PPO epoch {epoch+1}/{self.ppo_epoch}")
             for minibatch in make_dataset_naive(
                 data, batch_size=self.batch_size
             ):
@@ -247,7 +345,7 @@ class PPO(Policy):
         loss_crit_mean = torch.stack(loss_critics).mean()
         loss_ent_mean = torch.stack(loss_entropies).mean()
         
-        return {
+        result = {
             "advantage_meam": loc.item(),
             "advantage_std": scale.item(),
             "grad_norm": grad_norm_mean.item(),
@@ -256,6 +354,15 @@ class PPO(Policy):
             "loss_critic": loss_crit_mean.item(),
             "loss_entropy": loss_ent_mean.item(),
         }
+        
+        if should_log:
+            logger.debug(f"[Step {self._step_count}] Learning - Completed. "
+                        f"Loss: {result['loss']:.4f} (obj: {result['loss_objective']:.4f}, "
+                        f"crit: {result['loss_critic']:.4f}, ent: {result['loss_entropy']:.4f}), "
+                        f"Grad norm: {result['grad_norm']:.4f}, "
+                        f"Advantage mean: {result['advantage_meam']:.4f}, std: {result['advantage_std']:.4f}")
+        
+        return result
 
     def state_dict(self) -> Dict:
         return {
