@@ -8,8 +8,102 @@ import torch
 import torch.nn.functional as F
 from typing import Tuple
 import logging
+import numpy as np
 
 logger = logging.getLogger(__name__)
+
+
+def count_open_threes_for_move_np(
+    board: np.ndarray,
+    r: int,
+    c: int,
+    player_piece: int,
+    board_size: int,
+) -> int:
+    """
+    Counts how many open three patterns are created by placing a piece at (r, c).
+    An open three is a pattern _XXX_ (three consecutive pieces with empty on both sides).
+    NUMPY VERSION: Uses numpy array for faster access (no CPU-GPU sync).
+    """
+    num_open_threes = 0
+    directions = [
+        (0, 1),   # horizontal
+        (1, 0),   # vertical
+        (1, 1),   # diagonal \
+        (1, -1),  # diagonal /
+    ]
+    
+    # Check each direction
+    for dr, dc in directions:
+        # Quick bounds check first
+        if not (0 <= r - dr < board_size and 0 <= c - dc < board_size and
+                0 <= r + 3*dr < board_size and 0 <= c + 3*dc < board_size):
+            continue
+        
+        # Check pattern positions
+        if (board[r - dr, c - dc] == 0 and
+            (board[r, c] == 0 or board[r, c] == player_piece) and
+            board[r + dr, c + dc] == player_piece and
+            board[r + 2*dr, c + 2*dc] == player_piece and
+            board[r + 3*dr, c + 3*dc] == 0):
+            num_open_threes += 1
+    
+    return num_open_threes
+
+
+def count_open_fours_for_move_np(
+    board: np.ndarray,
+    r: int,
+    c: int,
+    player_piece: int,
+    board_size: int,
+) -> int:
+    """
+    Counts how many open four patterns are created by placing a piece at (r, c).
+    An open four is a pattern _XXXX_ (four consecutive pieces with empty on both sides).
+    NUMPY VERSION: Uses numpy array for faster access (no CPU-GPU sync).
+    """
+    num_open_fours = 0
+    directions = [
+        (0, 1),   # horizontal
+        (1, 0),   # vertical
+        (1, 1),   # diagonal \
+        (1, -1),  # diagonal /
+    ]
+    
+    for dr, dc in directions:
+        # Quick bounds check first
+        if not (0 <= r - dr < board_size and 0 <= c - dc < board_size and
+                0 <= r + 4*dr < board_size and 0 <= c + 4*dc < board_size):
+            continue
+        
+        # Check pattern positions
+        if (board[r - dr, c - dc] == 0 and
+            (board[r, c] == 0 or board[r, c] == player_piece) and
+            board[r + dr, c + dc] == player_piece and
+            board[r + 2*dr, c + 2*dc] == player_piece and
+            board[r + 3*dr, c + 3*dc] == player_piece and
+            board[r + 4*dr, c + 4*dc] == 0):
+            num_open_fours += 1
+    
+    return num_open_fours
+
+
+def detect_opponent_fork_np(
+    board: np.ndarray,
+    r: int,
+    c: int,
+    opponent_piece: int,
+    board_size: int,
+) -> bool:
+    """
+    Detects if placing a piece at (r, c) would block an opponent's fork (double-three threat).
+    NUMPY VERSION: Uses numpy array for faster access.
+    """
+    num_opponent_threes = count_open_threes_for_move_np(
+        board, r, c, opponent_piece, board_size
+    )
+    return num_opponent_threes >= 2
 
 
 def count_open_threes_for_move(
@@ -271,31 +365,34 @@ def compute_comprehensive_strategic_boost(
         center = board_size // 2
         nearby_mask[center-2:center+3, center-2:center+3] = True
     
+    # Convert nearby_mask to numpy once for faster access in loop
+    nearby_mask_np = nearby_mask.cpu().numpy()
+    
+    # Convert boards to numpy once for faster access
+    board_np = board_cpu.numpy()
+    
     # For each environment, evaluate strategic value
     for env_idx in range(num_envs):
-        env_board = board_cpu[env_idx]  # (B, B)
-        env_board_int = env_board.to(dtype=torch.int8)
+        env_board_np = board_np[env_idx]  # (B, B) numpy array
         env_mask = action_mask_cpu[env_idx]
         # Torch can hit an internal assert when torch.where/nonzero is called on
-        # non-contiguous or higher-dimensional boolean masks; use Python loop instead.
+        # non-contiguous or higher-dimensional boolean masks; convert to list once.
         env_mask_flat = env_mask.reshape(-1).contiguous()
         
-        # Get valid actions using Python loop to avoid PyTorch indexing bug
-        valid_action_list = []
-        for i in range(env_mask_flat.numel()):
-            if env_mask_flat[i].item():
-                valid_action_list.append(i)
+        # Get valid actions using list comprehension (faster than loop with .item())
+        mask_list = env_mask_flat.tolist()
+        valid_action_list = [i for i, m in enumerate(mask_list) if m]
         
         if len(valid_action_list) == 0:
             continue
         
-        # Separate nearby and far actions using Python loop
+        # Separate nearby and far actions using cached numpy array
         nearby_action_list = []
         far_action_list = []
         for action_idx in valid_action_list:
             r = action_idx // board_size
             c = action_idx % board_size
-            if nearby_mask[r, c].item():
+            if nearby_mask_np[r, c]:
                 nearby_action_list.append(action_idx)
             else:
                 far_action_list.append(action_idx)
@@ -316,20 +413,20 @@ def compute_comprehensive_strategic_boost(
                         f"Nearby actions: {len(nearby_action_list)}, "
                         f"Actions to check: {len(actions_to_check_list)}")
         
-        # Process each action using optimized pattern detection
+        # Process each action using numpy-optimized pattern detection
         for action_int in actions_to_check_list:
             r = action_int // board_size
             c = action_int % board_size
             
             # Skip if position is not empty
-            if env_board_int[r, c].item() != 0:
+            if env_board_np[r, c] != 0:
                 continue
             
             action_boost = 0.0
             
             # 1. Check for open fours (highest priority - winning move)
-            num_open_fours = count_open_fours_for_move(
-                env_board_int, r, c, int(player_piece), board_size
+            num_open_fours = count_open_fours_for_move_np(
+                env_board_np, r, c, int(player_piece), board_size
             )
             if num_open_fours > 0:
                 action_boost += open_four_boost * num_open_fours
@@ -341,8 +438,8 @@ def compute_comprehensive_strategic_boost(
                 continue  # Early exit - winning move found
             
             # 2. Check for blocking opponent's open four (critical defense)
-            opponent_open_fours = count_open_fours_for_move(
-                env_board_int, r, c, int(opponent_piece), board_size
+            opponent_open_fours = count_open_fours_for_move_np(
+                env_board_np, r, c, int(opponent_piece), board_size
             )
             if opponent_open_fours > 0:
                 action_boost += block_open_four_boost * opponent_open_fours
@@ -354,8 +451,8 @@ def compute_comprehensive_strategic_boost(
                 continue  # Early exit - critical defense found
             
             # 3. Check for double-open-three threats
-            num_open_threes = count_open_threes_for_move(
-                env_board_int, r, c, int(player_piece), board_size
+            num_open_threes = count_open_threes_for_move_np(
+                env_board_np, r, c, int(player_piece), board_size
             )
             if num_open_threes >= 2:
                 action_boost += double_open_three_boost
@@ -368,7 +465,7 @@ def compute_comprehensive_strategic_boost(
                 threat_stats['single_open_threes'] += 1
             
             # 4. Check for blocking opponent's fork (double-three threat)
-            if detect_opponent_fork(env_board_int, r, c, int(opponent_piece), board_size):
+            if detect_opponent_fork_np(env_board_np, r, c, int(opponent_piece), board_size):
                 action_boost += block_fork_boost
                 threat_stats['block_forks'] += 1
                 if debug and env_idx == 0:

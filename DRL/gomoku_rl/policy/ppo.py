@@ -18,6 +18,7 @@ from gomoku_rl.utils.module import (
     count_parameters,
 )
 from gomoku_rl.utils.threat_detection import compute_threat_boost
+from gomoku_rl.utils.threat_detection_cuda import compute_threat_boost_cuda
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +68,7 @@ class PPO(Policy):
         
         # Performance optimization
         self.max_actions_to_check: int = cfg.get("max_actions_to_check", 30)  # Optimized default
+        self.use_cuda_threat_detection: bool = cfg.get("use_cuda_threat_detection", True)  # Use CUDA version by default
         
         # Debug settings
         self.debug_threat_detection: bool = cfg.get("debug_threat_detection", False)
@@ -158,24 +160,46 @@ class PPO(Policy):
                             f"Avg valid actions: {num_valid_actions:.1f}")
             
             # Compute comprehensive strategic boost
-            strategic_boost = compute_threat_boost(
-                board=board,
-                action_mask=action_mask,
-                player_piece=player_piece,
-                board_size=board_size,
-                device=self.device,
-                double_three_boost=self.double_three_boost,
-                double_open_three_boost=self.double_open_three_boost,
-                open_four_boost=self.open_four_boost,
-                block_fork_boost=self.block_fork_boost,
-                block_open_four_boost=self.block_open_four_boost,
-                center_boost=self.center_boost,
-                corner_boost=self.corner_boost,
-                edge_boost=self.edge_boost,
-                max_actions_to_check=self.max_actions_to_check,
-                debug=should_log,
-                step_count=self._step_count,
-            )
+            if self.use_cuda_threat_detection:
+                # Use CUDA-optimized version (fully vectorized, no CPU sync)
+                strategic_boost = compute_threat_boost_cuda(
+                    board=board,
+                    action_mask=action_mask,
+                    player_piece=player_piece,
+                    board_size=board_size,
+                    device=self.device,
+                    double_three_boost=self.double_three_boost,
+                    double_open_three_boost=self.double_open_three_boost,
+                    open_four_boost=self.open_four_boost,
+                    block_fork_boost=self.block_fork_boost,
+                    block_open_four_boost=self.block_open_four_boost,
+                    center_boost=self.center_boost,
+                    corner_boost=self.corner_boost,
+                    edge_boost=self.edge_boost,
+                    max_actions_to_check=self.max_actions_to_check,
+                    debug=should_log,
+                    step_count=self._step_count,
+                )
+            else:
+                # Use CPU version with numpy (slower but more accurate pattern detection)
+                strategic_boost = compute_threat_boost(
+                    board=board,
+                    action_mask=action_mask,
+                    player_piece=player_piece,
+                    board_size=board_size,
+                    device=self.device,
+                    double_three_boost=self.double_three_boost,
+                    double_open_three_boost=self.double_open_three_boost,
+                    open_four_boost=self.open_four_boost,
+                    block_fork_boost=self.block_fork_boost,
+                    block_open_four_boost=self.block_open_four_boost,
+                    center_boost=self.center_boost,
+                    corner_boost=self.corner_boost,
+                    edge_boost=self.edge_boost,
+                    max_actions_to_check=self.max_actions_to_check,
+                    debug=should_log,
+                    step_count=self._step_count,
+                )
             
             if should_log:
                 # Analyze boost statistics
