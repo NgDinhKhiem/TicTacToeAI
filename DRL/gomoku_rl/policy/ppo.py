@@ -135,7 +135,7 @@ class PPO(Policy):
         if should_use_threat_detection:
             # Extract board state from observation
             observation = tensordict["observation"]  # (E, 3, B, B)
-            action_mask = tensordict["action_mask"]  # (E, B*B)
+            action_mask = tensordict["action_mask"].to(dtype=torch.bool)  # (E, B*B)
             
             board_size = observation.shape[-1]
             num_envs = observation.shape[0]
@@ -145,9 +145,7 @@ class PPO(Policy):
             opponent_board = observation[:, 1, :, :]  # (E, B, B)
             
             # Create full board: 1 for current player, -1 for opponent, 0 for empty
-            board = torch.zeros(num_envs, board_size, board_size, device=self.device, dtype=torch.long)
-            board = torch.where(current_player_board > 0.5, 1, board)
-            board = torch.where(opponent_board > 0.5, -1, board)
+            board = (current_player_board > 0.5).long() - (opponent_board > 0.5).long()
             
             # Current player is always 1 (black) in the observation encoding
             # The observation always shows current player as layer 0
@@ -213,11 +211,11 @@ class PPO(Policy):
                             logger.debug(f"  {i+1}. Action ({r},{c}) - Prob: {prob.item():.4f}, Boost: {boost_val:.2f}")
                 
                 # Convert to logits (add small epsilon to avoid log(0))
-                logits = torch.log(probs + 1e-8)
+                logits = torch.log(probs.clamp_min(1e-8))
                 # Apply strategic boost (divide by temperature to control strength)
                 logits = logits + strategic_boost / self.threat_boost_temperature
                 # Re-normalize with action mask (invalid actions should have -inf)
-                logits = torch.where(action_mask, logits, torch.tensor(-float('inf'), device=self.device))
+                logits = logits.masked_fill(~action_mask, -torch.inf)
                 # Convert back to probabilities
                 probs_boosted = torch.softmax(logits, dim=-1)
                 

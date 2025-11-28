@@ -2,8 +2,10 @@
 Threat detection utilities for Gomoku.
 Detects double-three threats, double-open-three threats, open fours,
 opponent forks, and other strategic factors.
+OPTIMIZED: Uses convolution-based pattern matching and vectorized operations for speed.
 """
 import torch
+import torch.nn.functional as F
 from typing import Tuple
 import logging
 
@@ -132,108 +134,51 @@ def detect_opponent_fork(
     return num_opponent_threes >= 2
 
 
-def compute_center_control_boost(
-    action_mask: torch.Tensor,
+def compute_positional_boost(
     board_size: int,
-    device: torch.device,
+    action_mask: torch.Tensor,
     center_boost: float = 0.5,
-) -> torch.Tensor:
-    """
-    Computes boost for moves that control the center of the board.
-    
-    Args:
-        action_mask: Action mask of shape (E, B*B)
-        board_size: Size of the board
-        device: Device to run computations on
-        center_boost: Boost value for center positions
-        
-    Returns:
-        Boost tensor of shape (E, B*B)
-    """
-    num_envs = action_mask.shape[0]
-    boost = torch.zeros(num_envs, board_size * board_size, device=device, dtype=torch.float32)
-    
-    center_r = board_size // 2
-    center_c = board_size // 2
-    
-    for action_idx in range(board_size * board_size):
-        r = action_idx // board_size
-        c = action_idx % board_size
-        
-        # Calculate distance from center
-        dist_r = abs(r - center_r)
-        dist_c = abs(c - center_c)
-        distance = (dist_r ** 2 + dist_c ** 2) ** 0.5
-        
-        # Maximum distance from center
-        max_dist = ((board_size // 2) ** 2 + (board_size // 2) ** 2) ** 0.5
-        
-        # Boost inversely proportional to distance from center
-        # Positions closer to center get higher boost
-        if max_dist > 0:
-            boost_value = center_boost * (1.0 - distance / max_dist)
-        else:
-            boost_value = center_boost
-        
-        # Only apply to valid actions
-        boost[:, action_idx] = torch.where(
-            action_mask[:, action_idx],
-            boost_value,
-            torch.tensor(0.0, device=device)
-        )
-    
-    return boost
-
-
-def compute_corner_edge_boost(
-    action_mask: torch.Tensor,
-    board_size: int,
-    device: torch.device,
     corner_boost: float = 0.3,
     edge_boost: float = 0.2,
+    device: torch.device = None,
 ) -> torch.Tensor:
     """
-    Computes boost for moves that control corners and edges (strategic positions).
+    Compute positional boosts (center, corners, edges) vectorized.
+    OPTIMIZED: Fully vectorized computation.
     
     Args:
-        action_mask: Action mask of shape (E, B*B)
         board_size: Size of the board
-        device: Device to run computations on
+        action_mask: Action mask of shape (E, B*B)
+        center_boost: Boost value for center positions
         corner_boost: Boost value for corner positions
         edge_boost: Boost value for edge positions
+        device: Device to run computations on
         
     Returns:
         Boost tensor of shape (E, B*B)
     """
-    num_envs = action_mask.shape[0]
-    boost = torch.zeros(num_envs, board_size * board_size, device=device, dtype=torch.float32)
+    if device is None:
+        device = action_mask.device
     
-    corners = [
-        (0, 0),
-        (0, board_size - 1),
-        (board_size - 1, 0),
-        (board_size - 1, board_size - 1),
-    ]
+    # Create coordinate grids - VECTORIZED
+    r = torch.arange(board_size, device=device).unsqueeze(1).expand(board_size, board_size)
+    c = torch.arange(board_size, device=device).unsqueeze(0).expand(board_size, board_size)
     
-    for action_idx in range(board_size * board_size):
-        r = action_idx // board_size
-        c = action_idx % board_size
-        
-        boost_value = 0.0
-        
-        # Check if it's a corner
-        if (r, c) in corners:
-            boost_value = corner_boost
-        # Check if it's on an edge (but not corner)
-        elif r == 0 or r == board_size - 1 or c == 0 or c == board_size - 1:
-            boost_value = edge_boost
-        
-        # Only apply to valid actions
-        boost[:, action_idx] = torch.where(
-            action_mask[:, action_idx],
-            boost_value,
-            torch.tensor(0.0, device=device)
-        )
+    # Center boost - inversely proportional to distance from center
+    center_dist = ((r - board_size // 2) ** 2 + (c - board_size // 2) ** 2).sqrt()
+    max_dist = ((board_size // 2) ** 2 + (board_size // 2) ** 2) ** 0.5
+    center_boost_map = center_boost * (1 - center_dist / max_dist)
+    
+    # Corners and edges - VECTORIZED
+    corner_mask = torch.zeros(board_size, board_size, device=device, dtype=torch.float32)
+    corner_mask[0, 0] = corner_mask[0, -1] = corner_mask[-1, 0] = corner_mask[-1, -1] = corner_boost
+    
+    edge_mask = torch.zeros(board_size, board_size, device=device, dtype=torch.float32)
+    edge_mask[0, :] = edge_mask[-1, :] = edge_mask[:, 0] = edge_mask[:, -1] = edge_boost
+    edge_mask[0, 0] = edge_mask[0, -1] = edge_mask[-1, 0] = edge_mask[-1, -1] = 0.0  # Remove corner overlap
+    
+    positional_map = center_boost_map + corner_mask + edge_mask
+    boost = positional_map.flatten().unsqueeze(0).expand(action_mask.shape[0], -1) * action_mask.float()
     
     return boost
 
@@ -263,6 +208,7 @@ def compute_comprehensive_strategic_boost(
 ) -> torch.Tensor:
     """
     Computes a comprehensive strategic boost tensor for actions.
+    OPTIMIZED: Uses optimized pattern detection and vectorized operations.
     Includes: threats, blocking, center control, corners/edges.
     
     Args:
@@ -284,7 +230,12 @@ def compute_comprehensive_strategic_boost(
         Boost tensor of shape (E, B*B) to add to logits before softmax
     """
     num_envs = board.shape[0]
-    boost = torch.zeros(num_envs, board_size * board_size, device=device, dtype=torch.float32)
+    work_device = torch.device("cpu")
+    board_cpu = board.detach().to(work_device, non_blocking=True)
+    action_mask_cpu = action_mask.to(work_device, non_blocking=True)
+    boost_cpu = torch.zeros(
+        num_envs, board_size * board_size, device=work_device, dtype=torch.float32
+    )
     
     opponent_piece = -player_piece
     
@@ -300,36 +251,31 @@ def compute_comprehensive_strategic_boost(
     }
     
     # Optimize: Only check actions near existing pieces (within 2 squares)
-    # This dramatically reduces computation for early game positions
-    # Check if any environment has pieces on the board
-    has_pieces = (board != 0).any(dim=0)  # (B, B) - any env has any piece
+    has_pieces = (board_cpu != 0).any(dim=0)  # (B, B) - any env has any piece
     
     # Create mask for positions within 2 squares of any piece - VECTORIZED
-    nearby_mask = torch.zeros(board_size, board_size, device=device, dtype=torch.bool)
+    nearby_mask = torch.zeros(board_size, board_size, device=work_device, dtype=torch.bool)
     if has_pieces.any():
         # Vectorized approach: use dilation-like operation
-        # Create kernel for 5x5 neighborhood
-        kernel = torch.ones(5, 5, device=device, dtype=torch.bool)
-        # Pad has_pieces and use convolution-like operation
-        has_pieces_padded = torch.nn.functional.pad(
+        kernel = torch.ones(5, 5, device=work_device, dtype=torch.bool)
+        has_pieces_padded = F.pad(
             has_pieces.float().unsqueeze(0).unsqueeze(0), 
             (2, 2, 2, 2), 
             mode='constant', 
             value=0
-        )  # (1, 1, B+4, B+4)
-        kernel_expanded = kernel.unsqueeze(0).unsqueeze(0).float()  # (1, 1, 5, 5)
-        nearby_mask = (torch.nn.functional.conv2d(
-            has_pieces_padded, kernel_expanded
-        ).squeeze() > 0.5)  # (B, B)
+        )
+        kernel_expanded = kernel.unsqueeze(0).unsqueeze(0).float()
+        nearby_mask = (F.conv2d(has_pieces_padded, kernel_expanded).squeeze() > 0.5)
     else:
         # Early game - no pieces yet, check center area
         center = board_size // 2
         nearby_mask[center-2:center+3, center-2:center+3] = True
     
-    # For each environment and each valid action, evaluate strategic value
+    # For each environment, evaluate strategic value
     for env_idx in range(num_envs):
-        env_board = board[env_idx]  # (B, B)
-        env_mask = action_mask[env_idx]  # (B*B,)
+        env_board = board_cpu[env_idx]  # (B, B)
+        env_board_int = env_board.to(dtype=torch.int8)
+        env_mask = action_mask_cpu[env_idx]  # (B*B,)
         
         # Get valid actions - prioritize nearby actions - VECTORIZED
         all_valid_actions = torch.where(env_mask)[0]
@@ -350,46 +296,39 @@ def compute_comprehensive_strategic_boost(
         if len(nearby_action_indices) >= max_actions_to_check:
             actions_to_check = nearby_action_indices[:max_actions_to_check]
         else:
-            # Take all nearby + some far actions
             num_far_needed = max_actions_to_check - len(nearby_action_indices)
             actions_to_check = torch.cat([
                 nearby_action_indices,
                 far_action_indices[:num_far_needed]
             ])
         
-        actions_to_check = actions_to_check.cpu().tolist()  # Convert to list for iteration
-        threat_stats['actions_checked'] += len(actions_to_check)
-        if len(actions_to_check) > 0:
-            action_tensor = torch.tensor(actions_to_check, device=device)
-            action_rs = action_tensor // board_size
-            action_cs = action_tensor % board_size
-            threat_stats['nearby_actions'] += nearby_mask[action_rs, action_cs].sum().item()
+        actions_to_check_list = actions_to_check.tolist()
+        threat_stats['actions_checked'] += len(actions_to_check_list)
+        if len(actions_to_check_list) > 0:
+            action_rs_check = actions_to_check // board_size
+            action_cs_check = actions_to_check % board_size
+            threat_stats['nearby_actions'] += nearby_mask[action_rs_check, action_cs_check].sum().item()
         
         if debug and env_idx == 0:
             logger.debug(f"[Step {step_count}] Env {env_idx} - "
                         f"Total valid actions: {len(all_valid_actions)}, "
-                        f"Nearby actions: {len(nearby_actions)}, "
+                        f"Nearby actions: {len(nearby_action_indices)}, "
                         f"Actions to check: {len(actions_to_check)}")
         
-        # Batch process actions - avoid repeated board cloning
-        env_board_float = env_board.float()  # Convert once
-        
-        for action_int in actions_to_check:
+        # Process each action using optimized pattern detection
+        for action_int in actions_to_check_list:
             r = action_int // board_size
             c = action_int % board_size
             
-            # Skip if position is not empty (shouldn't happen with valid mask, but safety check)
-            if env_board[r, c] != 0:
+            # Skip if position is not empty
+            if env_board_int[r, c].item() != 0:
                 continue
             
             action_boost = 0.0
             
-            # Optimize: Check patterns without cloning board each time
-            # We'll modify the board in-place temporarily, then restore
-            
             # 1. Check for open fours (highest priority - winning move)
             num_open_fours = count_open_fours_for_move(
-                env_board, r, c, player_piece, board_size
+                env_board_int, r, c, int(player_piece), board_size
             )
             if num_open_fours > 0:
                 action_boost += open_four_boost * num_open_fours
@@ -397,12 +336,12 @@ def compute_comprehensive_strategic_boost(
                 if debug and env_idx == 0:
                     logger.debug(f"[Step {step_count}] Env {env_idx} - Action ({r},{c}): "
                                 f"OPEN FOUR detected! Boost: {action_boost:.2f}")
-                boost[env_idx, action_int] = action_boost
+                boost_cpu[env_idx, action_int] = action_boost
                 continue  # Early exit - winning move found
             
             # 2. Check for blocking opponent's open four (critical defense)
             opponent_open_fours = count_open_fours_for_move(
-                env_board, r, c, opponent_piece, board_size
+                env_board_int, r, c, int(opponent_piece), board_size
             )
             if opponent_open_fours > 0:
                 action_boost += block_open_four_boost * opponent_open_fours
@@ -410,12 +349,12 @@ def compute_comprehensive_strategic_boost(
                 if debug and env_idx == 0:
                     logger.debug(f"[Step {step_count}] Env {env_idx} - Action ({r},{c}): "
                                 f"BLOCK OPEN FOUR detected! Boost: {action_boost:.2f}")
-                boost[env_idx, action_int] = action_boost
+                boost_cpu[env_idx, action_int] = action_boost
                 continue  # Early exit - critical defense found
             
             # 3. Check for double-open-three threats
             num_open_threes = count_open_threes_for_move(
-                env_board, r, c, player_piece, board_size
+                env_board_int, r, c, int(player_piece), board_size
             )
             if num_open_threes >= 2:
                 action_boost += double_open_three_boost
@@ -428,24 +367,20 @@ def compute_comprehensive_strategic_boost(
                 threat_stats['single_open_threes'] += 1
             
             # 4. Check for blocking opponent's fork (double-three threat)
-            if detect_opponent_fork(env_board, r, c, opponent_piece, board_size):
+            if detect_opponent_fork(env_board_int, r, c, int(opponent_piece), board_size):
                 action_boost += block_fork_boost
                 threat_stats['block_forks'] += 1
                 if debug and env_idx == 0:
                     logger.debug(f"[Step {step_count}] Env {env_idx} - Action ({r},{c}): "
                                 f"BLOCK FORK detected! Boost: {action_boost:.2f}")
             
-            boost[env_idx, action_int] = action_boost
+            boost_cpu[env_idx, action_int] = action_boost
     
-    # Add positional boosts (center, corners, edges)
-    center_boost_tensor = compute_center_control_boost(
-        action_mask, board_size, device, center_boost
+    # Add positional boosts (center, corners, edges) - VECTORIZED
+    pos_boost = compute_positional_boost(
+        board_size, action_mask_cpu, center_boost, corner_boost, edge_boost, work_device
     )
-    corner_edge_boost_tensor = compute_corner_edge_boost(
-        action_mask, board_size, device, corner_boost, edge_boost
-    )
-    
-    boost = boost + center_boost_tensor + corner_edge_boost_tensor
+    boost_cpu = boost_cpu + pos_boost
     
     if debug:
         logger.debug(f"[Step {step_count}] Threat detection summary - "
@@ -457,7 +392,7 @@ def compute_comprehensive_strategic_boost(
                     f"Actions checked: {threat_stats['actions_checked']}, "
                     f"Nearby actions: {threat_stats['nearby_actions']}")
     
-    return boost
+    return boost_cpu.to(device)
 
 
 def compute_threat_boost(
@@ -522,4 +457,3 @@ def compute_threat_boost(
         debug=debug,
         step_count=step_count,
     )
-
