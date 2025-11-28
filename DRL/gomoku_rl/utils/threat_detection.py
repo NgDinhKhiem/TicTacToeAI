@@ -275,45 +275,46 @@ def compute_comprehensive_strategic_boost(
     for env_idx in range(num_envs):
         env_board = board_cpu[env_idx]  # (B, B)
         env_board_int = env_board.to(dtype=torch.int8)
-        env_mask = action_mask_cpu[env_idx]  # (B*B,)
+        env_mask = action_mask_cpu[env_idx]
+        # Torch can hit an internal assert when torch.where/nonzero is called on
+        # non-contiguous or higher-dimensional boolean masks; use Python loop instead.
+        env_mask_flat = env_mask.reshape(-1).contiguous()
         
-        # Get valid actions - prioritize nearby actions - VECTORIZED
-        all_valid_actions = torch.where(env_mask)[0]
+        # Get valid actions using Python loop to avoid PyTorch indexing bug
+        valid_action_list = []
+        for i in range(env_mask_flat.numel()):
+            if env_mask_flat[i].item():
+                valid_action_list.append(i)
         
-        if len(all_valid_actions) == 0:
+        if len(valid_action_list) == 0:
             continue
         
-        # Convert action indices to (r, c) coordinates
-        action_rs = all_valid_actions // board_size
-        action_cs = all_valid_actions % board_size
-        
-        # Check which actions are nearby (vectorized)
-        is_nearby = nearby_mask[action_rs, action_cs]
-        nearby_action_indices = all_valid_actions[is_nearby]
-        far_action_indices = all_valid_actions[~is_nearby]
+        # Separate nearby and far actions using Python loop
+        nearby_action_list = []
+        far_action_list = []
+        for action_idx in valid_action_list:
+            r = action_idx // board_size
+            c = action_idx % board_size
+            if nearby_mask[r, c].item():
+                nearby_action_list.append(action_idx)
+            else:
+                far_action_list.append(action_idx)
         
         # Prioritize nearby actions, limit total
-        if len(nearby_action_indices) >= max_actions_to_check:
-            actions_to_check = nearby_action_indices[:max_actions_to_check]
+        if len(nearby_action_list) >= max_actions_to_check:
+            actions_to_check_list = nearby_action_list[:max_actions_to_check]
         else:
-            num_far_needed = max_actions_to_check - len(nearby_action_indices)
-            actions_to_check = torch.cat([
-                nearby_action_indices,
-                far_action_indices[:num_far_needed]
-            ])
+            num_far_needed = max_actions_to_check - len(nearby_action_list)
+            actions_to_check_list = nearby_action_list + far_action_list[:num_far_needed]
         
-        actions_to_check_list = actions_to_check.tolist()
         threat_stats['actions_checked'] += len(actions_to_check_list)
-        if len(actions_to_check_list) > 0:
-            action_rs_check = actions_to_check // board_size
-            action_cs_check = actions_to_check % board_size
-            threat_stats['nearby_actions'] += nearby_mask[action_rs_check, action_cs_check].sum().item()
+        threat_stats['nearby_actions'] += len(nearby_action_list)
         
         if debug and env_idx == 0:
             logger.debug(f"[Step {step_count}] Env {env_idx} - "
-                        f"Total valid actions: {len(all_valid_actions)}, "
-                        f"Nearby actions: {len(nearby_action_indices)}, "
-                        f"Actions to check: {len(actions_to_check)}")
+                        f"Total valid actions: {len(valid_action_list)}, "
+                        f"Nearby actions: {len(nearby_action_list)}, "
+                        f"Actions to check: {len(actions_to_check_list)}")
         
         # Process each action using optimized pattern detection
         for action_int in actions_to_check_list:

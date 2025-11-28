@@ -10,42 +10,6 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static('public'));
 
-// Helper function to pretty print matrix
-function prettyPrintMatrix(matrix) {
-    if (!matrix || !Array.isArray(matrix)) {
-        return 'Invalid matrix';
-    }
-    
-    const rows = matrix.length;
-    if (rows === 0) {
-        return 'Empty matrix';
-    }
-    
-    const cols = matrix[0]?.length || 0;
-    let output = `\n  Board (${rows}x${cols}):\n`;
-    
-    // Add column headers
-    output += '    ';
-    for (let c = 0; c < cols; c++) {
-        output += `${c.toString().padStart(3)} `;
-    }
-    output += '\n';
-    
-    // Add rows with row numbers
-    for (let r = 0; r < rows; r++) {
-        output += `  ${r.toString().padStart(2)} `;
-        for (let c = 0; c < cols; c++) {
-            const cell = matrix[r]?.[c] || '-';
-            // Replace '-' with '.' for better visibility, keep X and O as is
-            const display = cell === '-' ? '.' : cell;
-            output += `${display.toString().padStart(3)} `;
-        }
-        output += '\n';
-    }
-    
-    return output;
-}
-
 // Helper function to make HTTP requests
 function makeRequest(url, options = {}) {
     return new Promise((resolve, reject) => {
@@ -100,27 +64,11 @@ app.get('/api/move', async (req, res) => {
         const apiUrl = `${API_SERVER_URL}/api/move?${queryString}`;
         
         console.log(`[${new Date().toISOString()}] Proxying request to: ${apiUrl}`);
-        
-        // Parse and pretty print matrix if present
-        if (req.query.matrix) {
-            try {
-                const matrix = JSON.parse(decodeURIComponent(req.query.matrix));
-                console.log(prettyPrintMatrix(matrix));
-            } catch (e) {
-                console.log(`  Matrix (raw): ${req.query.matrix}`);
-            }
-        }
-        
-        // Log other query params (excluding matrix to avoid clutter)
-        const otherParams = { ...req.query };
-        delete otherParams.matrix;
-        if (Object.keys(otherParams).length > 0) {
-            console.log(`  Other params:`, otherParams);
-        }
+        console.log(`  Query params:`, req.query);
         
         // Log last move parameters specifically
         if (req.query.last_move_row !== undefined || req.query.last_move_col !== undefined) {
-            console.log(`  Last move: row=${req.query.last_move_row}, col=${req.query.last_move_col}`);
+            console.log(`  Last move params: row=${req.query.last_move_row}, col=${req.query.last_move_col}`);
         } else {
             console.log(`  No last move parameters provided`);
         }
@@ -128,9 +76,6 @@ app.get('/api/move', async (req, res) => {
         const response = await makeRequest(apiUrl);
         
         console.log(`  Response status: ${response.status}`);
-        if (response.data && response.data.row !== undefined && response.data.col !== undefined) {
-            console.log(`  AI move: row=${response.data.row}, col=${response.data.col}`);
-        }
         res.status(response.status).json(response.data);
     } catch (error) {
         console.error(`[${new Date().toISOString()}] Error proxying request to API server:`, error);
