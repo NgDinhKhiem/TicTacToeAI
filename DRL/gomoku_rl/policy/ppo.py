@@ -17,6 +17,7 @@ from .common import (
 from gomoku_rl.utils.module import (
     count_parameters,
 )
+from gomoku_rl.utils.threat_detection import compute_threat_boost
 
 
 class PPO(Policy):
@@ -29,7 +30,7 @@ class PPO(Policy):
     ) -> None:
         super().__init__(cfg, action_spec, observation_spec, device)
         self.cfg: DictConfig = cfg
-        self.device: _device_t = device
+        self.device: Union[str, torch.device] = device
 
         self.clip_param: float = cfg.clip_param
         self.ppo_epoch: int = int(cfg.ppo_epochs)
@@ -41,6 +42,25 @@ class PPO(Policy):
         self.batch_size: int = int(cfg.batch_size)
 
         self.max_grad_norm: float = cfg.max_grad_norm
+        
+        # Strategic evaluation parameters
+        self.use_threat_detection: bool = cfg.get("use_threat_detection", True)
+        self.threat_boost_temperature: float = cfg.get("threat_boost_temperature", 1.0)
+        
+        # Threat parameters
+        self.double_three_boost: float = cfg.get("double_three_boost", 2.0)
+        self.double_open_three_boost: float = cfg.get("double_open_three_boost", 3.0)
+        self.open_four_boost: float = cfg.get("open_four_boost", 5.0)
+        
+        # Blocking parameters
+        self.block_fork_boost: float = cfg.get("block_fork_boost", 4.0)
+        self.block_open_four_boost: float = cfg.get("block_open_four_boost", 6.0)
+        
+        # Positional parameters
+        self.center_boost: float = cfg.get("center_boost", 0.5)
+        self.corner_boost: float = cfg.get("corner_boost", 0.3)
+        self.edge_boost: float = cfg.get("edge_boost", 0.2)
+        
         if self.cfg.get("share_network"):
             actor_value_operator = make_ppo_ac(
                 cfg, action_spec=action_spec, device=self.device
@@ -80,7 +100,63 @@ class PPO(Policy):
         if tensordict.device != self.device:
             tensordict = tensordict.to(self.device)
         actor_input = tensordict.select("observation", "action_mask", strict=False)
+        
+        # Get actor output (probabilities)
         actor_output: TensorDict = self.actor(actor_input)
+        
+        # Apply threat detection boost if enabled
+        if self.use_threat_detection and not self.actor.training:
+            # Extract board state from observation
+            observation = tensordict["observation"]  # (E, 3, B, B)
+            action_mask = tensordict["action_mask"]  # (E, B*B)
+            
+            board_size = observation.shape[-1]
+            num_envs = observation.shape[0]
+            
+            # Reconstruct board state: layer 0 = current player (1), layer 1 = opponent (-1)
+            current_player_board = observation[:, 0, :, :]  # (E, B, B)
+            opponent_board = observation[:, 1, :, :]  # (E, B, B)
+            
+            # Create full board: 1 for current player, -1 for opponent, 0 for empty
+            board = torch.zeros(num_envs, board_size, board_size, device=self.device, dtype=torch.long)
+            board = torch.where(current_player_board > 0.5, 1, board)
+            board = torch.where(opponent_board > 0.5, -1, board)
+            
+            # Current player is always 1 (black) in the observation encoding
+            # The observation always shows current player as layer 0
+            player_piece = 1  # Current player piece
+            
+            # Compute comprehensive strategic boost
+            strategic_boost = compute_threat_boost(
+                board=board,
+                action_mask=action_mask,
+                player_piece=player_piece,
+                board_size=board_size,
+                device=self.device,
+                double_three_boost=self.double_three_boost,
+                double_open_three_boost=self.double_open_three_boost,
+                open_four_boost=self.open_four_boost,
+                block_fork_boost=self.block_fork_boost,
+                block_open_four_boost=self.block_open_four_boost,
+                center_boost=self.center_boost,
+                corner_boost=self.corner_boost,
+                edge_boost=self.edge_boost,
+            )
+            
+            # Modify probabilities by converting to logits, applying boost, and converting back
+            if "probs" in actor_output.keys():
+                probs = actor_output["probs"]  # (E, B*B)
+                # Convert to logits (add small epsilon to avoid log(0))
+                logits = torch.log(probs + 1e-8)
+                # Apply strategic boost (divide by temperature to control strength)
+                logits = logits + strategic_boost / self.threat_boost_temperature
+                # Re-normalize with action mask (invalid actions should have -inf)
+                logits = torch.where(action_mask, logits, torch.tensor(-float('inf'), device=self.device))
+                # Convert back to probabilities
+                probs_boosted = torch.softmax(logits, dim=-1)
+                # Update the actor output
+                actor_output["probs"] = probs_boosted
+        
         actor_output = actor_output.exclude("probs")
         tensordict.update(actor_output)
 

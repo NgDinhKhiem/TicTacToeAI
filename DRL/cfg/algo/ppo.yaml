@@ -23,4 +23,21 @@ optimizer:
 num_channels: 64
 num_residual_blocks: 4
 
+# Strategic evaluation parameters
+use_threat_detection: true
+threat_boost_temperature: 1.0  # Temperature for strategic boost (higher = less aggressive boost)
+
+# Threat parameters (creating threats)
+double_three_boost: 2.0  # Boost for single open three threats
+double_open_three_boost: 3.0  # Boost for double-open-three threats (2+ open threes)
+open_four_boost: 5.0  # Boost for open four threats (winning moves)
+
+# Blocking parameters (defending against opponent)
+block_fork_boost: 4.0  # Boost for blocking opponent's fork (double-three threat)
+block_open_four_boost: 6.0  # Boost for blocking opponent's open four (critical defense)
+
+# Positional parameters (board control)
+center_boost: 0.5  # Boost for center positions (higher for positions closer to center)
+corner_boost: 0.3  # Boost for corner positions
+edge_boost: 0.2  # Boost for edge positions (but not corners)
 
